@@ -11,12 +11,15 @@
 </section>
 
 <section>
-  <h2>Upload a document</h2>
-  <form id="upload-form" class="card">
-    <input type="file" id="file" name="file" accept=".txt,.md,.pdf,.html,.htm" required />
-    <button type="submit" class="primary">Upload &amp; index</button>
-    <p class="muted small">Supported: .txt, .md, .pdf, .html</p>
-  </form>
+  <h2>Upload documents</h2>
+  <div class="card">
+    <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Upload files">
+      <input type="file" id="file-input" multiple accept=".txt,.md,.pdf,.html,.htm" hidden />
+      <p class="dropzone-primary">Drag files here, or <span class="link">click to browse</span></p>
+      <p class="muted small">Supported: .txt, .md, .pdf, .html — multiple files OK</p>
+    </div>
+    <ul id="upload-queue" class="upload-queue hidden"></ul>
+  </div>
 </section>
 
 <section>
@@ -73,24 +76,97 @@
     }
   }
 
-  document.getElementById('upload-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fileInput = document.getElementById('file');
-    if (!fileInput.files.length) return;
-    const fd = new FormData();
-    fd.append('file', fileInput.files[0]);
-    const btn = e.target.querySelector('button');
-    btn.disabled = true; btn.textContent = 'Indexing...';
-    try {
-      const res = await api.postForm(`/api/datasets/${encodeURIComponent(DATASET_ID)}/documents/upload`, fd);
-      toast(`${res.status}: ${res.filename} (${res.chunks_added} chunks)`);
-      e.target.reset();
-      loadDocs();
-    } catch (err) {
-      toast('Upload failed: ' + err.message, true);
-    } finally {
-      btn.disabled = false; btn.textContent = 'Upload & index';
+  // ----- Multi-file drag-and-drop upload -----
+  const SUPPORTED_EXTS = ['.txt', '.md', '.pdf', '.html', '.htm'];
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('file-input');
+  const queue = document.getElementById('upload-queue');
+  const pending = [];
+  let processing = false;
+
+  function isSupported(name) {
+    const i = name.lastIndexOf('.');
+    return i >= 0 && SUPPORTED_EXTS.includes(name.slice(i).toLowerCase());
+  }
+  function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+  function setStatus(row, klass, text) {
+    const s = row.querySelector('.status');
+    s.className = 'status status-' + klass;
+    s.textContent = text;
+  }
+
+  function addFiles(files) {
+    if (!files.length) return;
+    queue.classList.remove('hidden');
+    fileInput.value = ''; // allow re-selecting the same file later
+    for (const f of files) {
+      const row = document.createElement('li');
+      row.className = 'queue-row';
+      row.innerHTML = `
+        <span class="filename"></span>
+        <span class="filesize"></span>
+        <span class="status status-pending">pending</span>`;
+      row.querySelector('.filename').textContent = f.name;
+      row.querySelector('.filesize').textContent = formatBytes(f.size);
+      queue.appendChild(row);
+      if (!isSupported(f.name)) {
+        setStatus(row, 'error', 'unsupported type');
+        continue;
+      }
+      pending.push({ file: f, row });
     }
+    processNext();
+  }
+
+  async function processNext() {
+    if (processing) return;
+    const next = pending.shift();
+    if (!next) { loadDocs(); return; }
+    processing = true;
+    setStatus(next.row, 'uploading', 'uploading...');
+    const fd = new FormData();
+    fd.append('file', next.file);
+    try {
+      const res = await api.postForm(
+        `/api/datasets/${encodeURIComponent(DATASET_ID)}/documents/upload`, fd);
+      const klass = res.status === 'skipped' ? 'skipped' : 'ok';
+      setStatus(next.row, klass, `${res.status} · ${res.chunks_added} chunks`);
+    } catch (err) {
+      setStatus(next.row, 'error', err.message);
+    } finally {
+      processing = false;
+      loadDocs();
+      processNext();
+    }
+  }
+
+  // Click anywhere on the dropzone (or press Enter/Space) to open file picker.
+  dropzone.addEventListener('click', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    fileInput.click();
+  });
+  dropzone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener('change', (e) => addFiles([...e.target.files]));
+
+  // Drag-and-drop wiring. Note: dropped folders aren't expanded in v1 — they'll
+  // appear as a single unsupported entry. Add webkitGetAsEntry recursion if needed.
+  ['dragenter', 'dragover'].forEach(ev => dropzone.addEventListener(ev, (e) => {
+    e.preventDefault();
+    dropzone.classList.add('is-dragover');
+  }));
+  ['dragleave', 'drop'].forEach(ev => dropzone.addEventListener(ev, (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('is-dragover');
+  }));
+  dropzone.addEventListener('drop', (e) => {
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length) addFiles([...files]);
   });
 
   loadDocs();
