@@ -29,6 +29,7 @@
 
 <section>
   <h2>Results</h2>
+  <div id="verdict" class="verdict hidden"></div>
   <div id="results" class="empty">Run a search to see results here.</div>
 </section>
 {% endblock %}
@@ -58,8 +59,22 @@
     }
   }
 
+  function renderVerdict(data) {
+    const banner = document.getElementById('verdict');
+    const label = data.overall_confidence || 'none';
+    const pct = Math.round((data.overall_confidence_score || 0) * 100);
+    banner.className = `verdict verdict-${label}`;
+    if (label === 'none' || !data.hits.length) {
+      banner.textContent = data.overall_message;
+    } else {
+      banner.innerHTML = `${escapeHtml(data.overall_message)} <span class="verdict-pct">${pct}% confidence</span>`;
+    }
+    banner.classList.remove('hidden');
+  }
+
   function renderResults(data) {
     const container = document.getElementById('results');
+    renderVerdict(data);
     if (!data.hits.length) {
       container.className = 'empty';
       container.textContent = 'No matches.';
@@ -69,12 +84,16 @@
     container.innerHTML = '';
     data.hits.forEach((hit, i) => {
       const ref = hit.reference;
+      const pct = Math.round((hit.confidence || 0) * 100);
+      const label = hit.confidence_label || 'low';
       const card = document.createElement('article');
       card.className = 'hit';
       card.innerHTML = `
         <header>
           <span class="rank">#${i + 1}</span>
-          <span class="score" title="Cosine similarity">score ${hit.score.toFixed(3)}</span>
+          <span class="badge badge-${label}" title="cosine similarity ${hit.score.toFixed(3)}">
+            ${label.toUpperCase()} &middot; ${pct}%
+          </span>
         </header>
         <p class="passage">${escapeHtml(hit.text)}</p>
         <footer class="ref">
@@ -93,6 +112,8 @@
     if (!dataset_id || !query) return;
 
     const container = document.getElementById('results');
+    const banner = document.getElementById('verdict');
+    banner.className = 'verdict hidden';
     container.className = 'empty';
     container.textContent = 'Searching...';
 

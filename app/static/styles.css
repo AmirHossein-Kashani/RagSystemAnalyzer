@@ -146,6 +146,42 @@ tr:last-child td { border-bottom: none; }
 .hit .ref { font-size: 0.9rem; }
 .hit .ref strong { margin-right: 0.4rem; }
 
+/* Confidence badges (per-hit) */
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+  line-height: 1.2;
+}
+.badge-high   { background: #e6f7ec; color: #1d6a37; border-color: #b6e2c5; }
+.badge-medium { background: #fff5e0; color: #8a5a00; border-color: #f3dca4; }
+.badge-low    { background: #fde8e6; color: #962a1f; border-color: #f4b7b1; }
+.badge-none   { background: #eef0f4; color: #4b5563; border-color: #d6dae3; }
+
+/* Overall verdict banner (above results) */
+.verdict {
+  margin-bottom: 0.75rem;
+  padding: 0.7rem 1rem;
+  border-radius: 6px;
+  border-left: 4px solid #c8cbd3;
+  background: #f0f2f7;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+.verdict .verdict-pct {
+  margin-left: 0.5rem;
+  font-weight: 600;
+}
+.verdict-high   { background: #e6f7ec; border-left-color: #1d6a37; color: #145528; }
+.verdict-medium { background: #fff5e0; border-left-color: #b07300; color: #6e4600; }
+.verdict-low    { background: #fde8e6; border-left-color: #962a1f; color: #6d1d15; }
+.verdict-none   { background: #eef0f4; border-left-color: #6b7280; color: #3a3f4a; }
+.verdict.hidden { display: none; }
+
 .toast {
   position: fixed;
   right: 1.25rem;

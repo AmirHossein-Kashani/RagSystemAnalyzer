@@ -63,7 +63,9 @@ class SearchReference(BaseModel):
 
 class SearchHit(BaseModel):
     text: str
-    score: float
+    score: float           # raw cosine similarity, kept for transparency
+    confidence: float      # calibrated 0..1
+    confidence_label: str  # "high" | "medium" | "low"
     reference: SearchReference
 
 
@@ -71,3 +73,6 @@ class SearchResponse(BaseModel):
     query: str
     dataset_id: str
     hits: list[SearchHit]
+    overall_confidence: str         # "high" | "medium" | "low" | "none"
+    overall_confidence_score: float  # top hit's calibrated confidence, 0 if no hits
+    overall_message: str
