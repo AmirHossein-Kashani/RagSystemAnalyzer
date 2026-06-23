@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+
+{% block content %}
+<section>
+  <h1>Search</h1>
+  <p class="muted">Pick a dataset, ask a question, and get back the most relevant passages with their references.</p>
+
+  <form id="search-form" class="card">
+    <div class="field">
+      <label for="dataset">Dataset</label>
+      <select id="dataset" required>
+        <option value="" disabled selected>Loading datasets...</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="query">Query</label>
+      <textarea id="query" rows="3" required placeholder="What do you want to know?"></textarea>
+    </div>
+    <div class="field inline">
+      <label for="top_k">Top K</label>
+      <input id="top_k" type="number" min="1" max="50" value="5" />
+    </div>
+    <div class="actions">
+      <button type="submit" class="primary">Search</button>
+    </div>
+  </form>
+</section>
+
+<section>
+  <h2>Results</h2>
+  <div id="results" class="empty">Run a search to see results here.</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadDatasets() {
+    const select = document.getElementById('dataset');
+    try {
+      const items = await api.get('/api/datasets');
+      const params = new URLSearchParams(window.location.search);
+      const preselect = params.get('dataset_id');
+      if (!items.length) {
+        select.innerHTML = '<option value="" disabled selected>No datasets — create one first</option>';
+        return;
+      }
+      select.innerHTML = '';
+      for (const d of items) {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = `${d.name}  (${d.document_count} docs)`;
+        if (preselect && d.id === preselect) opt.selected = true;
+        select.appendChild(opt);
+      }
+    } catch (err) {
+      select.innerHTML = `<option value="" disabled selected>Failed to load: ${escapeHtml(err.message)}</option>`;
+    }
+  }
+
+  function renderResults(data) {
+    const container = document.getElementById('results');
+    if (!data.hits.length) {
+      container.className = 'empty';
+      container.textContent = 'No matches.';
+      return;
+    }
+    container.className = '';
+    container.innerHTML = '';
+    data.hits.forEach((hit, i) => {
+      const ref = hit.reference;
+      const card = document.createElement('article');
+      card.className = 'hit';
+      card.innerHTML = `
+        <header>
+          <span class="rank">#${i + 1}</span>
+          <span class="score" title="Cosine similarity">score ${hit.score.toFixed(3)}</span>
+        </header>
+        <p class="passage">${escapeHtml(hit.text)}</p>
+        <footer class="ref">
+          <strong>${escapeHtml(ref.filename)}</strong>
+          <span class="muted">chunk ${ref.chunk_index} &middot; dataset "${escapeHtml(ref.dataset_name)}"</span>
+        </footer>`;
+      container.appendChild(card);
+    });
+  }
+
+  document.getElementById('search-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const dataset_id = document.getElementById('dataset').value;
+    const query = document.getElementById('query').value.trim();
+    const top_k = parseInt(document.getElementById('top_k').value, 10) || 5;
+    if (!dataset_id || !query) return;
+
+    const container = document.getElementById('results');
+    container.className = 'empty';
+    container.textContent = 'Searching...';
+
+    try {
+      const data = await api.post('/api/search', { dataset_id, query, top_k });
+      renderResults(data);
+    } catch (err) {
+      container.className = 'empty error';
+      container.textContent = 'Search failed: ' + err.message;
+    }
+  });
+
+  loadDatasets();
+</script>
+{% endblock %}

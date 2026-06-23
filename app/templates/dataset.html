@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}{{ dataset_name }} — Dataset{% endblock %}
+
+{% block content %}
+<section>
+  <p class="crumbs"><a href="/datasets">Datasets</a> / <span>{{ dataset_name }}</span></p>
+  <div class="row spread">
+    <h1>{{ dataset_name }}</h1>
+    <a class="button" href="/search?dataset_id={{ dataset_id }}">Search this dataset &rarr;</a>
+  </div>
+</section>
+
+<section>
+  <h2>Upload a document</h2>
+  <form id="upload-form" class="card">
+    <input type="file" id="file" name="file" accept=".txt,.md,.pdf,.html,.htm" required />
+    <button type="submit" class="primary">Upload &amp; index</button>
+    <p class="muted small">Supported: .txt, .md, .pdf, .html</p>
+  </form>
+</section>
+
+<section>
+  <h2>Documents</h2>
+  <div id="docs-list" class="card empty">Loading...</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const DATASET_ID = "{{ dataset_id }}";
+
+  async function loadDocs() {
+    const container = document.getElementById('docs-list');
+    try {
+      const items = await api.get(`/api/datasets/${encodeURIComponent(DATASET_ID)}/documents`);
+      if (!items.length) {
+        container.className = 'card empty';
+        container.textContent = 'No documents yet. Upload one above.';
+        return;
+      }
+      container.className = 'card';
+      container.innerHTML = '';
+      const table = document.createElement('table');
+      table.innerHTML = `
+        <thead><tr><th>Filename</th><th>Chunks</th><th>Indexed</th><th></th></tr></thead>
+        <tbody></tbody>`;
+      const tbody = table.querySelector('tbody');
+      for (const d of items) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${escapeHtml(d.filename)}</td>
+          <td>${d.chunk_count}</td>
+          <td>${formatDate(d.indexed_at)}</td>
+          <td><button class="danger" data-id="${d.id}">Delete</button></td>`;
+        tr.querySelector('button.danger').addEventListener('click', () => deleteDoc(d.id, d.filename));
+        tbody.appendChild(tr);
+      }
+      container.appendChild(table);
+    } catch (err) {
+      container.className = 'card error';
+      container.textContent = 'Failed to load documents: ' + err.message;
+    }
+  }
+
+  async function deleteDoc(docId, filename) {
+    if (!confirm(`Delete "${filename}"?`)) return;
+    try {
+      await api.del(`/api/datasets/${encodeURIComponent(DATASET_ID)}/documents/${encodeURIComponent(docId)}`);
+      toast(`Deleted "${filename}"`);
+      loadDocs();
+    } catch (err) {
+      toast('Delete failed: ' + err.message, true);
+    }
+  }
+
+  document.getElementById('upload-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fileInput = document.getElementById('file');
+    if (!fileInput.files.length) return;
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Indexing...';
+    try {
+      const res = await api.postForm(`/api/datasets/${encodeURIComponent(DATASET_ID)}/documents/upload`, fd);
+      toast(`${res.status}: ${res.filename} (${res.chunks_added} chunks)`);
+      e.target.reset();
+      loadDocs();
+    } catch (err) {
+      toast('Upload failed: ' + err.message, true);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Upload & index';
+    }
+  });
+
+  loadDocs();
+</script>
+{% endblock %}

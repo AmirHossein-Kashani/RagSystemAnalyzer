@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(netstat -ano)",
+      "Bash(awk '{print $5}')",
+      "Bash(./.venv/Scripts/python.exe -m pip install \"sqlalchemy>=2.0\" \"jinja2>=3.1\")"
+    ]
+  }
+}

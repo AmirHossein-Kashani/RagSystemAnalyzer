@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Datasets{% endblock %}
+
+{% block content %}
+<section>
+  <h1>Datasets</h1>
+  <p class="muted">Create a dataset, then upload documents to it. Each dataset is a separate knowledge base.</p>
+
+  <form id="create-form" class="card">
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" required maxlength="120" placeholder="e.g. compliance-policies" />
+    </div>
+    <div class="field">
+      <label for="description">Description <span class="muted">(optional)</span></label>
+      <textarea id="description" name="description" rows="2" maxlength="1000" placeholder="What's in this dataset?"></textarea>
+    </div>
+    <div class="actions">
+      <button type="submit" class="primary">Create dataset</button>
+    </div>
+  </form>
+</section>
+
+<section>
+  <h2>Your datasets</h2>
+  <div id="datasets-list" class="card empty">Loading...</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadDatasets() {
+    const container = document.getElementById('datasets-list');
+    try {
+      const items = await api.get('/api/datasets');
+      if (!items.length) {
+        container.className = 'card empty';
+        container.textContent = 'No datasets yet. Create one above.';
+        return;
+      }
+      container.className = 'card';
+      container.innerHTML = '';
+      const table = document.createElement('table');
+      table.innerHTML = `
+        <thead><tr><th>Name</th><th>Description</th><th>Docs</th><th>Created</th><th></th></tr></thead>
+        <tbody></tbody>`;
+      const tbody = table.querySelector('tbody');
+      for (const d of items) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><a href="/datasets/${encodeURIComponent(d.id)}">${escapeHtml(d.name)}</a></td>
+          <td>${escapeHtml(d.description || '')}</td>
+          <td>${d.document_count}</td>
+          <td>${formatDate(d.created_at)}</td>
+          <td><button class="danger" data-id="${d.id}">Delete</button></td>`;
+        tr.querySelector('button.danger').addEventListener('click', () => deleteDataset(d.id, d.name));
+        tbody.appendChild(tr);
+      }
+      container.appendChild(table);
+    } catch (err) {
+      container.className = 'card error';
+      container.textContent = 'Failed to load datasets: ' + err.message;
+    }
+  }
+
+  async function deleteDataset(id, name) {
+    if (!confirm(`Delete dataset "${name}" and all its documents?`)) return;
+    try {
+      await api.del(`/api/datasets/${encodeURIComponent(id)}`);
+      toast(`Deleted "${name}"`);
+      loadDatasets();
+    } catch (err) {
+      toast('Delete failed: ' + err.message, true);
+    }
+  }
+
+  document.getElementById('create-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('name').value.trim();
+    const description = document.getElementById('description').value.trim() || null;
+    if (!name) return;
+    try {
+      const ds = await api.post('/api/datasets', { name, description });
+      toast(`Created dataset "${ds.name}"`);
+      e.target.reset();
+      loadDatasets();
+    } catch (err) {
+      toast('Create failed: ' + err.message, true);
+    }
+  });
+
+  loadDatasets();
+</script>
+{% endblock %}
