@@ -1,0 +1,49 @@
+services:
+  rag:
+    build: .
+    image: rag-service:latest
+    container_name: rag-service
+    ports:
+      - "8765:8765"
+    volumes:
+      # Persistent SQLite + Chroma + uploaded files.
+      - rag-data:/app/data
+      # Edit the LLM config on the host; restart `rag` to apply.
+      - ./llm_config.json:/app/llm_config.json:ro
+    environment:
+      # Override any RAG_* settings here. SQLite default is fine for single-host.
+      RAG_EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/api/health',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # ---- Optional Postgres backend ---------------------------------------------
+  # Uncomment this service AND set the two env lines below in the `rag` service
+  # to switch from SQLite to Postgres. Remember to:
+  #   1. Add `psycopg[binary]>=3.2` to requirements.txt
+  #   2. `docker compose build rag` to rebuild
+  #
+  # rag:
+  #   environment:
+  #     RAG_DATABASE_URL: postgresql+psycopg://rag:rag@db:5432/rag
+  #   depends_on:
+  #     - db
+  #
+  # db:
+  #   image: postgres:16-alpine
+  #   container_name: rag-db
+  #   environment:
+  #     POSTGRES_USER: rag
+  #     POSTGRES_PASSWORD: rag
+  #     POSTGRES_DB: rag
+  #   volumes:
+  #     - rag-db:/var/lib/postgresql/data
+  #   restart: unless-stopped
+
+volumes:
+  rag-data:
+  # rag-db:

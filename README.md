@@ -27,6 +27,113 @@ LLM generate grounded answers from the retrieved passages.
 - ~1 GB free disk for dependencies (torch, sentence-transformers, etc.)
 - An OpenAI-compatible LLM endpoint **only if** you want generated answers (Ollama works; see "LLM configuration" below)
 
+## Deploy with Docker (Ubuntu VPS)
+
+Run the whole service with one command. Persistent data is kept in a Docker named volume; the LLM config is bind-mounted so you can edit it on the host and restart without rebuilding.
+
+### Server prerequisites
+
+- Ubuntu 22.04+ (or any distro with Docker Engine 24+ and Compose v2)
+- ~4 GB free disk (image is ~3 GB; data volume grows with your documents)
+- ~2 GB free RAM at runtime
+- TCP port 8765 reachable (firewall + provider security group)
+
+Install Docker if it's not there:
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER     # log out and back in for this to take effect
+```
+
+### One-time setup on the VPS
+
+```bash
+# 1. Get the code onto the server
+git clone <your-repo-url> rag && cd rag        # or: scp -r . user@vps:~/rag
+
+# 2. Set the LLM config (Ollama or OpenAI — see "LLM configuration" below)
+nano llm_config.json
+
+# 3. Build the image (first time: 5–10 min — torch CPU + model bake)
+docker compose build
+```
+
+### Run
+
+```bash
+docker compose up -d              # start in the background
+docker compose logs -f rag        # tail logs (Ctrl+C to detach)
+```
+
+Verify:
+
+```bash
+curl -s http://localhost:8765/api/health    # {"status":"ok"}
+```
+
+Then visit `http://<vps-ip>:8765/` for the UI and `/docs` for Swagger.
+
+### Day-to-day commands
+
+```bash
+docker compose restart rag        # apply changes to llm_config.json
+docker compose pull && docker compose up -d   # if you ship images via a registry
+docker compose down               # stop (data preserved)
+docker compose down -v            # stop AND wipe the data volume (datasets, chroma, uploads)
+```
+
+### Updating the app
+
+```bash
+git pull
+docker compose up -d --build      # rebuild + restart
+```
+
+### Persistence
+
+SQLite, Chroma, and uploaded files all live in the `rag-data` named volume. Inspect with:
+
+```bash
+docker volume ls
+docker volume inspect rag_rag-data       # path on the host
+```
+
+Backup the volume to a tarball:
+
+```bash
+docker run --rm -v rag_rag-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/rag-data-$(date +%F).tar.gz -C / data
+```
+
+(Restore: `docker run --rm -v rag_rag-data:/data -v "$PWD":/backup alpine tar xzf /backup/rag-data-YYYY-MM-DD.tar.gz -C /`.)
+
+### Editing the LLM config
+
+`./llm_config.json` is bind-mounted read-only into the container. Change it on the host and run:
+
+```bash
+docker compose restart rag
+```
+
+(The config is loaded once at startup and cached via `lru_cache`.)
+
+### Switching to Postgres
+
+A commented stanza is staged in `docker-compose.yml`. To activate:
+
+1. Uncomment the `db:` service and the two `rag.environment` lines that set `RAG_DATABASE_URL` + `depends_on`.
+2. Add `psycopg[binary]>=3.2` to `requirements.txt`.
+3. `docker compose up -d --build`.
+
+The existing SQLite data **does not** migrate automatically — wipe the relational rows (and re-index documents) or write a one-off migration script.
+
+### Production hardening (recommended)
+
+- **Reverse proxy** — terminate TLS with Caddy / nginx / Traefik on the VPS and proxy to `127.0.0.1:8765`. Don't expose 8765 directly with a real-world LLM key inside.
+- **Bind to localhost** in `docker-compose.yml` once the proxy is in place: change `"8765:8765"` to `"127.0.0.1:8765:8765"`.
+- **Auth** — this service has no authentication. Add one (basic auth at the proxy is the easiest) before allowing inbound traffic.
+- **Secrets** — once `llm_config.json` holds a real OpenAI key, restrict its permissions (`chmod 600 llm_config.json`) and never commit it.
+
 ## Quick start (Windows + PowerShell)
 
 ```powershell
@@ -227,6 +334,7 @@ requirements.txt
 
 ## Troubleshooting
 
+- **Docker build is huge / pulls CUDA** — make sure you're using the provided `Dockerfile`; it installs CPU-only torch from `https://download.pytorch.org/whl/cpu` *before* `requirements.txt`. Default PyPI torch on Linux x86_64 is the CUDA build (~2.5 GB extra).
 - **`Activate.ps1` not found** — your venv was created by a base Python (e.g. miniconda) that ships without activate templates. Delete `.venv` and recreate with `py -m venv .venv` from a standard CPython 3.12 install.
 - **`WinError 10013` on port 8000** — Windows reserves a port range for Hyper-V. Use `--port 8765` (or any other free port).
 - **First search/upload is slow** — the embedding model loads lazily on first use; subsequent calls are fast.
