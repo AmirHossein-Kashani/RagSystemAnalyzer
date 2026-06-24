@@ -76,3 +76,61 @@ class SearchResponse(BaseModel):
     overall_confidence: str         # "high" | "medium" | "low" | "none"
     overall_confidence_score: float  # top hit's calibrated confidence, 0 if no hits
     overall_message: str
+
+
+# ---------- Ask (RAG) ----------
+
+class AskRequest(BaseModel):
+    dataset_id: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(5, ge=1, le=20)
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+
+
+class AskResponse(BaseModel):
+    query: str
+    dataset_id: str
+    answer: str
+    model: str
+    provider: str
+    search: SearchResponse  # the retrieval used as context (with references + confidence)
+
+
+# ---------- LLM (direct, caller-supplied context) ----------
+
+class LLMPassage(BaseModel):
+    filename: str
+    chunk_index: int = 0
+    text: str = Field(..., min_length=1)
+
+
+class LLMAnswerRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    passages: list[LLMPassage] = Field(..., min_length=1)
+    model: Optional[str] = None         # override llm_config.json
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    system_prompt: Optional[str] = None  # override llm_config.json
+
+
+class LLMChatRequest(BaseModel):
+    """Direct chat with the LLM — no retrieval, no supplied context."""
+    query: str = Field(..., min_length=1)
+    model: Optional[str] = None
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    system_prompt: Optional[str] = None
+
+
+class LLMAnswerResponse(BaseModel):
+    query: str
+    answer: str
+    model: str
+    provider: str
+
+
+class LLMInfo(BaseModel):
+    provider: str
+    base_url: str
+    model: str  # resolved (auto-discovered for Ollama if not pinned)
+    default_temperature: float
+    default_system_prompt: str
+    max_context_chars: int

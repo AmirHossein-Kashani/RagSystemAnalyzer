@@ -1,0 +1,11 @@
+{
+  "provider": "openai",
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "sk-REPLACE_WITH_YOUR_OPENAI_KEY",
+  "model": "gpt-4o-mini",
+  "headers": {},
+  "temperature": 0.2,
+  "max_context_chars": 8000,
+  "request_timeout_seconds": 60,
+  "system_prompt": "You are a concise, factual assistant. Answer the user's question using ONLY the supplied context passages. If the context does not contain the answer, say so explicitly instead of guessing. Cite the sources you used as [1], [2], etc., matching the numbered passages."
+}

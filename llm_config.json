@@ -1,0 +1,13 @@
+{
+  "provider": "ollama",
+  "base_url": "https://widen-oops-sandfish.ngrok-free.dev/v1",
+  "api_key": "ollama",
+  "model": null,
+  "headers": {
+    "ngrok-skip-browser-warning": "true"
+  },
+  "temperature": 0.1,
+  "max_context_chars": 8000,
+  "request_timeout_seconds": 120,
+  "system_prompt": "You are a concise, factual assistant. Answer the user's question using ONLY the supplied context passages. If the context does not contain the answer, say so explicitly instead of guessing. Cite the sources you used as [1], [2], etc., matching the numbered passages."
+}

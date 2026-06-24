@@ -3,7 +3,9 @@
     "allow": [
       "Bash(netstat -ano)",
       "Bash(awk '{print $5}')",
-      "Bash(./.venv/Scripts/python.exe -m pip install \"sqlalchemy>=2.0\" \"jinja2>=3.1\")"
+      "Bash(./.venv/Scripts/python.exe -m pip install \"sqlalchemy>=2.0\" \"jinja2>=3.1\")",
+      "Bash(./.venv/Scripts/python.exe -m pip install \"openai>=1.40\" \"httpx>=0.27\")",
+      "Bash(./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8765)"
     ]
   }
 }

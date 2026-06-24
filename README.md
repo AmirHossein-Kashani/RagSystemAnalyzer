@@ -2,17 +2,22 @@
 
 A local CPU-friendly Retrieval-Augmented Generation service built with FastAPI,
 ChromaDB, and sentence-transformers. Create multiple datasets, upload documents
-into them, and run reference-aware semantic search over each dataset.
+into them, run reference-aware semantic search, and (optionally) have a configurable
+LLM generate grounded answers from the retrieved passages.
 
 ## Features
 
 - Multi-dataset knowledge bases — each dataset is an isolated collection of documents
 - Supported file types: `.txt`, `.md`, `.pdf`, `.html` / `.htm`
 - Local embeddings (`sentence-transformers/all-MiniLM-L6-v2`) — no API key, CPU-only
-- ChromaDB persistent vector store (cosine similarity)
+- ChromaDB persistent vector store (cosine similarity), per-dataset filtering
 - SQLite metadata store (Postgres-ready — change one URL)
+- Drag-and-drop multi-file upload with per-file status (web UI)
+- **Calibrated confidence** on every hit: percentage + High / Medium / Low badge, plus an overall verdict banner
+- **LLM-backed answers** via any OpenAI-compatible endpoint (Ollama out of the box, real OpenAI by editing one file)
+- Four LLM-related endpoints: full RAG (`/api/ask`), ask-with-supplied-context (`/api/llm/answer`), direct chat (`/api/llm/chat`), and config inspection (`/api/llm/info`)
 - Server-rendered web UI (Jinja + vanilla JS, no build step)
-- Every search hit returns a `reference`: dataset name, filename, chunk index, score
+- Every search hit returns a `reference` (dataset, filename, chunk index) and the LLM is instructed to cite as `[1]`, `[2]`, …
 - Iterative re-indexing: re-uploading an unchanged file is a no-op (SHA-256 check)
 
 ## Prerequisites
@@ -20,6 +25,7 @@ into them, and run reference-aware semantic search over each dataset.
 - **Python 3.12** (standard CPython — `py -V` should report `3.12.x`)
 - Windows / macOS / Linux
 - ~1 GB free disk for dependencies (torch, sentence-transformers, etc.)
+- An OpenAI-compatible LLM endpoint **only if** you want generated answers (Ollama works; see "LLM configuration" below)
 
 ## Quick start (Windows + PowerShell)
 
@@ -64,13 +70,17 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 
 ## Using the app
 
-1. Open http://127.0.0.1:8765/ — go to **Datasets**
+1. Open http://127.0.0.1:8765/ → **Datasets**
 2. Create a dataset (e.g. `policies`)
-3. Open the dataset, **upload** one or more documents (txt / md / pdf / html)
-4. Go to **Search**, pick the dataset, ask a question
-5. Each result card shows the passage plus its reference (filename + chunk index + dataset)
+3. Open the dataset and **drag files** onto the upload zone (or click to browse — multi-select supported). Each file gets its own status row: `pending → uploading → ok / skipped / error`.
+4. Go to **Search**, pick the dataset, type a question
+   - Click **Search** to get ranked passages with confidence badges
+   - Click **Ask LLM** to additionally have the configured LLM generate a grounded answer that cites the passages it used
+5. Each result card shows the passage, a colored confidence badge (`HIGH / MEDIUM / LOW · NN%`), and its reference (filename + chunk index + dataset). An overall verdict banner above the results summarizes the response confidence.
 
 ## REST API
+
+### Datasets and documents
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -80,25 +90,84 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 | GET    | `/api/datasets/{id}`                           | Dataset details |
 | DELETE | `/api/datasets/{id}`                           | Delete dataset (cascades chunks + files) |
 | GET    | `/api/datasets/{id}/documents`                 | List documents in a dataset |
-| POST   | `/api/datasets/{id}/documents/upload`          | Multipart upload + index |
+| POST   | `/api/datasets/{id}/documents/upload`          | Multipart upload + index (one file per call) |
 | DELETE | `/api/datasets/{id}/documents/{doc_id}`        | Remove a document |
-| POST   | `/api/search`                                  | `{dataset_id, query, top_k}` → ranked hits with references |
+
+### Search, ask, and LLM
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST   | `/api/search`     | `{dataset_id, query, top_k}` → ranked hits + confidence + references |
+| POST   | `/api/ask`        | `{dataset_id, query, top_k}` → retrieves first, then the LLM answers from those chunks (full RAG round trip) |
+| POST   | `/api/llm/answer` | `{query, passages: [{filename, chunk_index, text}], ...}` → LLM answers from caller-supplied passages (no retrieval) |
+| POST   | `/api/llm/chat`   | `{query, ...}` → raw LLM call, no context, no retrieval |
+| GET    | `/api/llm/info`   | Current LLM provider, base URL, resolved model, defaults |
+
+`top_k` is optional (defaults to `RAG_DEFAULT_TOP_K`). `temperature`, `model`, and `system_prompt` can be overridden per request on the LLM endpoints.
 
 See `/docs` for the full interactive Swagger spec.
 
-## Configuration
+## LLM configuration
 
-All settings have defaults. Create a `.env` in the project root to override (prefix with `RAG_`):
+The LLM is configured by a single JSON file at the project root: **`llm_config.json`**. Edit it to swap providers — no code change required.
+
+Ships with **Ollama via an OpenAI-compatible endpoint**:
+
+```json
+{
+  "provider": "ollama",
+  "base_url": "https://your-ollama-host/v1",
+  "api_key": "ollama",
+  "model": null,
+  "headers": { "ngrok-skip-browser-warning": "true" },
+  "temperature": 0.1,
+  "max_context_chars": 8000,
+  "request_timeout_seconds": 120,
+  "system_prompt": "..."
+}
+```
+
+- `provider`: `"ollama"` or `"openai"`. For Ollama, if `model` is `null` the server auto-discovers the first model via `/api/tags`. For `"openai"` you must pin a model.
+- `base_url`: the OpenAI-compatible chat endpoint (usually ends in `/v1`).
+- `api_key`: any non-empty string for Ollama; a real key for OpenAI.
+- `headers`: extra HTTP headers (e.g. `ngrok-skip-browser-warning` when fronting Ollama with ngrok).
+- `temperature` / `system_prompt`: defaults the LLM endpoints use unless overridden per request.
+- `max_context_chars`: cap on concatenated retrieved-passage characters in the prompt.
+
+### Swap to real OpenAI
+
+A ready template lives at **`llm_config.openai.json`**. To switch:
+
+```powershell
+Copy-Item .\llm_config.json .\llm_config.ollama.json    # back up the current config
+Copy-Item -Force .\llm_config.openai.json .\llm_config.json
+notepad .\llm_config.json                                # paste your sk-... key
+# restart the server
+```
+
+To switch back: `Copy-Item -Force .\llm_config.ollama.json .\llm_config.json` and restart.
+
+> If you `git init` this project, add `llm_config.json` to `.gitignore` once it contains a real key. Commit only the `*.openai.json` / `*.ollama.json` templates with placeholder keys.
+
+## Configuration (env vars)
+
+All app settings have defaults. Create a `.env` in the project root to override (prefix with `RAG_`):
 
 ```env
 RAG_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 RAG_CHUNK_SIZE=800
 RAG_CHUNK_OVERLAP=120
 RAG_DEFAULT_TOP_K=5
+
 RAG_DATABASE_URL=sqlite:///./data/app.db
 RAG_DOCS_DIR=data/docs
 RAG_CHROMA_DIR=data/chroma
 RAG_COLLECTION_NAME=documents
+
+# Confidence calibration (tuned for all-MiniLM-L6-v2; see "Tuning confidence" below)
+RAG_CONFIDENCE_FULL_SCORE=0.60
+RAG_CONFIDENCE_HIGH_THRESHOLD=0.70
+RAG_CONFIDENCE_MEDIUM_THRESHOLD=0.40
 ```
 
 To migrate to PostgreSQL later:
@@ -109,6 +178,16 @@ RAG_DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname
 
 (Then `pip install "psycopg[binary]"`.)
 
+### Tuning confidence
+
+Raw cosine similarity from `all-MiniLM-L6-v2` rarely exceeds ~0.7 in practice. The calibration maps `cosine / RAG_CONFIDENCE_FULL_SCORE` clamped to `[0, 1]`, then labels:
+
+- `confidence ≥ RAG_CONFIDENCE_HIGH_THRESHOLD`   → **high** (green)
+- `confidence ≥ RAG_CONFIDENCE_MEDIUM_THRESHOLD` → **medium** (amber)
+- otherwise                                       → **low** (red)
+
+If your queries consistently produce 0.2–0.35 raw scores and you'd like those to read higher, lower `RAG_CONFIDENCE_FULL_SCORE` (e.g. to `0.35`) and re-tune the thresholds.
+
 ## Project layout
 
 ```
@@ -116,25 +195,32 @@ app/
   config.py        # pydantic-settings, env-driven
   db.py            # SQLAlchemy engine + session
   models.py        # ORM: Dataset, Document
-  schemas.py       # Pydantic request/response
+  schemas.py       # Pydantic request/response (datasets, search, ask, llm)
   repository.py    # SQL CRUD helpers
   loader.py        # file -> text (.txt/.md/.pdf/.html)
   chunker.py       # text -> overlapping windows
   embedder.py      # sentence-transformers wrapper (CPU, normalized)
   store.py         # ChromaDB wrapper, dataset-scoped queries
   indexer.py       # orchestration + SHA-256 change detection
-  deps.py          # FastAPI Depends singletons
+  confidence.py    # score → confidence calibration + label + overall verdict
+  retrieval.py     # shared retrieve() used by /api/search and /api/ask
+  llm.py           # LLM config, OpenAI-SDK client, prompt builder, model auto-discovery
+  deps.py          # FastAPI Depends singletons (embedder, store, indexer)
   main.py          # app factory + lifespan + router mounting
   routers/
     datasets.py    # /api/datasets/*
     search.py      # /api/search
+    ask.py         # /api/ask (retrieve + LLM)
+    llm.py         # /api/llm/{info, answer, chat}
     ui.py          # /, /datasets, /search HTML pages
   templates/       # Jinja: base, datasets, dataset, search
   static/          # app.js, styles.css
 data/
-  app.db           # SQLite (auto-created)
+  app.db           # SQLite metadata (auto-created)
   chroma/          # vector index (auto-created)
   docs/<id>/       # uploaded files, isolated per dataset
+llm_config.json         # active LLM provider config
+llm_config.openai.json  # template for switching to real OpenAI
 requirements.txt
 .env.example
 ```
@@ -144,10 +230,12 @@ requirements.txt
 - **`Activate.ps1` not found** — your venv was created by a base Python (e.g. miniconda) that ships without activate templates. Delete `.venv` and recreate with `py -m venv .venv` from a standard CPython 3.12 install.
 - **`WinError 10013` on port 8000** — Windows reserves a port range for Hyper-V. Use `--port 8765` (or any other free port).
 - **First search/upload is slow** — the embedding model loads lazily on first use; subsequent calls are fast.
-- **Re-upload returns `status: "skipped"`** — SHA-256 matched; the file content is unchanged. Edit the file (or rename it) to force re-indexing.
+- **Re-upload returns `status: "skipped"`** — SHA-256 matched; the file content is unchanged. Edit (or rename) the file to force re-indexing.
+- **`/api/ask` returns 502** — the LLM endpoint is unreachable. Check that `llm_config.json` points at a live server, the API key is correct, and (for ngrok-fronted Ollama) the `ngrok-skip-browser-warning` header is present. `GET /api/llm/info` is a quick health probe.
+- **`llm_config.json` changes don't take effect** — the config is cached per process via `lru_cache`. Restart the server after edits.
 
 ## Notes
 
 - **No authentication** — single-operator mode. Add an auth layer before exposing on a network.
-- **Retrieval only** — the server returns ranked passages with references. There's no LLM generation step; that's deliberate.
-- **One dataset per search** in v1; multi-dataset is a small extension when needed.
+- **Retrieval is independent of generation** — `/api/search` never calls an LLM. Generation is opt-in via `/api/ask`, `/api/llm/answer`, or `/api/llm/chat`. Confidence and references are computed for every retrieval response, so callers can decide what to do downstream.
+- **One dataset per search/ask** in v1; multi-dataset is a small extension when needed.

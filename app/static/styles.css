@@ -199,6 +199,34 @@ tr:last-child td { border-bottom: none; }
 .status-skipped   { background: #eef0f4; color: #4b5563; border-color: #d6dae3; }
 .status-error     { background: #fde8e6; color: #962a1f; border-color: #f4b7b1; }
 
+/* LLM answer card */
+.answer {
+  background: #f6f8ff;
+  border: 1px solid #c9d4f7;
+  border-left: 4px solid var(--primary);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  box-shadow: var(--shadow);
+}
+.answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.answer-model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+}
+.answer-body {
+  white-space: pre-wrap;
+  line-height: 1.55;
+  font-size: 0.96rem;
+}
+.hidden { display: none; }
+
+.actions button + button { margin-left: 0.5rem; }
+
 /* Confidence badges (per-hit) */
 .badge {
   display: inline-block;
