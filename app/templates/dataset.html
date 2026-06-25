@@ -50,8 +50,9 @@
       const tbody = table.querySelector('tbody');
       for (const d of items) {
         const tr = document.createElement('tr');
+        const href = `/api/datasets/${encodeURIComponent(DATASET_ID)}/documents/${encodeURIComponent(d.id)}/file`;
         tr.innerHTML = `
-          <td>${escapeHtml(d.filename)}</td>
+          <td><a href="${href}" target="_blank" rel="noopener">${escapeHtml(d.filename)}</a></td>
           <td>${d.chunk_count}</td>
           <td>${formatDate(d.indexed_at)}</td>
           <td><button class="danger" data-id="${d.id}">Delete</button></td>`;

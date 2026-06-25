@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from .. import repository
@@ -103,6 +104,35 @@ def upload_document(
         return indexer.index_file(session, dataset_id, target, target.name)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+_MIME_BY_EXT = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+}
+
+
+@router.get("/{dataset_id}/documents/{doc_id}/file")
+def download_document(
+    dataset_id: str, doc_id: str, session: SessionDep
+) -> FileResponse:
+    """Stream the original uploaded file. Browsers render PDFs/HTML inline; txt/md show as text."""
+    document = repository.get_document(session, doc_id)
+    if document is None or document.dataset_id != dataset_id:
+        raise HTTPException(status_code=404, detail="document not found")
+    path = Path(document.source_path)
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail="file no longer on disk")
+    media_type = _MIME_BY_EXT.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=document.filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.delete("/{dataset_id}/documents/{doc_id}", status_code=204)
