@@ -13,6 +13,7 @@ LLM generate grounded answers from the retrieved passages.
 - ChromaDB persistent vector store (cosine similarity), per-dataset filtering
 - SQLite metadata store (Postgres-ready — change one URL)
 - Drag-and-drop multi-file upload with per-file status (web UI)
+- **Folder upload** — pick a folder or drop one onto the upload zone; nested subfolders are expanded and relative paths are preserved (e.g. `policies/2024/handbook.pdf`)
 - **Calibrated confidence** on every hit: percentage + High / Medium / Low badge, plus an overall verdict banner
 - **LLM-backed answers** via any OpenAI-compatible endpoint (Ollama out of the box, real OpenAI by editing one file)
 - Four LLM-related endpoints: full RAG (`/api/ask`), ask-with-supplied-context (`/api/llm/answer`), direct chat (`/api/llm/chat`), and config inspection (`/api/llm/info`)
@@ -179,7 +180,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 
 1. Open http://127.0.0.1:8765/ → **Datasets**
 2. Create a dataset (e.g. `policies`)
-3. Open the dataset and **drag files** onto the upload zone (or click to browse — multi-select supported). Each file gets its own status row: `pending → uploading → ok / skipped / error`.
+3. Open the dataset and **drag files or a folder** onto the upload zone (or click to browse files, or use **Upload folder**). Each supported file gets its own status row: `pending → uploading → ok / skipped / error`. Nested paths inside a folder are kept (e.g. `docs/guide.md`).
 4. Go to **Search**, pick the dataset, type a question
    - Click **Search** to get ranked passages with confidence badges
    - Click **Ask LLM** to additionally have the configured LLM generate a grounded answer that cites the passages it used
@@ -304,6 +305,7 @@ app/
   models.py        # ORM: Dataset, Document
   schemas.py       # Pydantic request/response (datasets, search, ask, llm)
   repository.py    # SQL CRUD helpers
+  paths.py         # upload path sanitization
   loader.py        # file -> text (.txt/.md/.pdf/.html)
   chunker.py       # text -> overlapping windows
   embedder.py      # sentence-transformers wrapper (CPU, normalized)

@@ -13,6 +13,7 @@ from ..config import settings
 from ..db import get_session
 from ..deps import get_indexer
 from ..indexer import Indexer
+from ..paths import sanitize_relative_path
 from ..schemas import DatasetCreate, DatasetOut, DocumentOut, IndexResult
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
@@ -92,16 +93,19 @@ def upload_document(
     dataset = repository.get_dataset(session, dataset_id)
     if dataset is None:
         raise HTTPException(status_code=404, detail="dataset not found")
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="filename missing")
+    try:
+        relative_path = sanitize_relative_path(file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     dataset_dir = settings.docs_dir / dataset_id
     dataset_dir.mkdir(parents=True, exist_ok=True)
-    target = dataset_dir / Path(file.filename).name
+    target = dataset_dir / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(file.file.read())
 
     try:
-        return indexer.index_file(session, dataset_id, target, target.name)
+        return indexer.index_file(session, dataset_id, target, relative_path)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

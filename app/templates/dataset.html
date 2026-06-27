@@ -13,10 +13,14 @@
 <section>
   <h2>Upload documents</h2>
   <div class="card">
-    <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Upload files">
+    <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Upload files or folder">
       <input type="file" id="file-input" multiple accept=".txt,.md,.pdf,.html,.htm" hidden />
-      <p class="dropzone-primary">Drag files here, or <span class="link">click to browse</span></p>
-      <p class="muted small">Supported: .txt, .md, .pdf, .html — multiple files OK</p>
+      <p class="dropzone-primary">Drag files or a folder here, or <span class="link">click to browse</span></p>
+      <p class="muted small">Supported: .txt, .md, .pdf, .html — multiple files or nested folders OK</p>
+    </div>
+    <div class="upload-actions">
+      <input type="file" id="folder-input" webkitdirectory multiple hidden />
+      <button type="button" id="folder-btn" class="button secondary">Upload folder</button>
     </div>
     <ul id="upload-queue" class="upload-queue hidden"></ul>
   </div>
@@ -77,18 +81,15 @@
     }
   }
 
-  // ----- Multi-file drag-and-drop upload -----
-  const SUPPORTED_EXTS = ['.txt', '.md', '.pdf', '.html', '.htm'];
+  // ----- Multi-file and folder upload -----
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('file-input');
+  const folderInput = document.getElementById('folder-input');
+  const folderBtn = document.getElementById('folder-btn');
   const queue = document.getElementById('upload-queue');
   const pending = [];
   let processing = false;
 
-  function isSupported(name) {
-    const i = name.lastIndexOf('.');
-    return i >= 0 && SUPPORTED_EXTS.includes(name.slice(i).toLowerCase());
-  }
   function formatBytes(n) {
     if (n < 1024) return n + ' B';
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
@@ -100,25 +101,27 @@
     s.textContent = text;
   }
 
-  function addFiles(files) {
-    if (!files.length) return;
+  function addUploads(entries) {
+    if (!entries.length) return;
     queue.classList.remove('hidden');
-    fileInput.value = ''; // allow re-selecting the same file later
-    for (const f of files) {
+    fileInput.value = '';
+    folderInput.value = '';
+    for (const entry of entries) {
+      const { file, relativePath } = entry;
       const row = document.createElement('li');
       row.className = 'queue-row';
       row.innerHTML = `
         <span class="filename"></span>
         <span class="filesize"></span>
         <span class="status status-pending">pending</span>`;
-      row.querySelector('.filename').textContent = f.name;
-      row.querySelector('.filesize').textContent = formatBytes(f.size);
+      row.querySelector('.filename').textContent = relativePath;
+      row.querySelector('.filesize').textContent = formatBytes(file.size);
       queue.appendChild(row);
-      if (!isSupported(f.name)) {
+      if (!isSupportedUpload(relativePath)) {
         setStatus(row, 'error', 'unsupported type');
         continue;
       }
-      pending.push({ file: f, row });
+      pending.push({ file, relativePath, row });
     }
     processNext();
   }
@@ -130,7 +133,7 @@
     processing = true;
     setStatus(next.row, 'uploading', 'uploading...');
     const fd = new FormData();
-    fd.append('file', next.file);
+    fd.append('file', next.file, next.relativePath);
     try {
       const res = await api.postForm(
         `/api/datasets/${encodeURIComponent(DATASET_ID)}/documents/upload`, fd);
@@ -145,7 +148,6 @@
     }
   }
 
-  // Click anywhere on the dropzone (or press Enter/Space) to open file picker.
   dropzone.addEventListener('click', (e) => {
     if (e.target.tagName === 'INPUT') return;
     fileInput.click();
@@ -153,10 +155,14 @@
   dropzone.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
   });
-  fileInput.addEventListener('change', (e) => addFiles([...e.target.files]));
+  fileInput.addEventListener('change', (e) => {
+    addUploads(collectFilesFromFileList(e.target.files));
+  });
+  folderBtn.addEventListener('click', () => folderInput.click());
+  folderInput.addEventListener('change', (e) => {
+    addUploads(collectFilesFromFileList(e.target.files));
+  });
 
-  // Drag-and-drop wiring. Note: dropped folders aren't expanded in v1 — they'll
-  // appear as a single unsupported entry. Add webkitGetAsEntry recursion if needed.
   ['dragenter', 'dragover'].forEach(ev => dropzone.addEventListener(ev, (e) => {
     e.preventDefault();
     dropzone.classList.add('is-dragover');
@@ -165,9 +171,13 @@
     e.preventDefault();
     dropzone.classList.remove('is-dragover');
   }));
-  dropzone.addEventListener('drop', (e) => {
-    const files = e.dataTransfer && e.dataTransfer.files;
-    if (files && files.length) addFiles([...files]);
+  dropzone.addEventListener('drop', async (e) => {
+    try {
+      const entries = await collectFilesFromDataTransfer(e.dataTransfer);
+      addUploads(entries);
+    } catch (err) {
+      toast('Failed to read dropped folder: ' + err.message, true);
+    }
   });
 
   loadDocs();

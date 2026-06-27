@@ -107,6 +107,8 @@ button, .button {
 button:hover, .button:hover { background: #f1f2f6; }
 button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
 button.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+button.secondary, .button.secondary { background: #fff; color: var(--muted); }
+button.secondary:hover, .button.secondary:hover { background: #f1f2f6; color: var(--text); }
 button.danger { color: var(--danger); border-color: var(--danger); background: #fff; }
 button.danger:hover { background: var(--danger); color: #fff; }
 button[disabled] { opacity: 0.6; cursor: progress; }
@@ -165,6 +167,11 @@ tr:last-child td { border-bottom: none; }
 }
 .dropzone-primary { margin: 0 0 0.35rem; font-size: 1rem; }
 .dropzone .link { color: var(--primary); text-decoration: underline; }
+
+.upload-actions {
+  margin-top: 0.85rem;
+  text-align: center;
+}
 
 .upload-queue {
   list-style: none;
