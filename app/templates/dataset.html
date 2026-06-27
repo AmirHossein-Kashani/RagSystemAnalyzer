@@ -58,25 +58,32 @@
         container.textContent = 'No documents yet. Upload one above.';
         return;
       }
-      container.className = 'card';
+      container.className = 'card docs-list-card';
       container.innerHTML = '';
-      const table = document.createElement('table');
-      table.innerHTML = `
-        <thead><tr><th>Filename</th><th>Chunks</th><th>Indexed</th><th></th></tr></thead>
-        <tbody></tbody>`;
-      const tbody = table.querySelector('tbody');
+      const list = document.createElement('div');
+      list.className = 'docs-list';
+      list.innerHTML = `
+        <div class="docs-row docs-header">
+          <div class="doc-filename">Filename</div>
+          <div class="doc-chunks">Chunks</div>
+          <div class="doc-indexed">Indexed</div>
+          <div class="doc-actions"></div>
+        </div>`;
       for (const d of items) {
-        const tr = document.createElement('tr');
+        const row = document.createElement('div');
+        row.className = 'docs-row';
         const href = `/api/datasets/${encodeURIComponent(DATASET_ID)}/documents/${encodeURIComponent(d.id)}/file`;
-        tr.innerHTML = `
-          <td><a href="${href}" target="_blank" rel="noopener">${escapeHtml(d.filename)}</a></td>
-          <td>${d.chunk_count}</td>
-          <td>${formatDate(d.indexed_at)}</td>
-          <td><button class="danger" data-id="${d.id}">Delete</button></td>`;
-        tr.querySelector('button.danger').addEventListener('click', () => deleteDoc(d.id, d.filename));
-        tbody.appendChild(tr);
+        row.innerHTML = `
+          <div class="doc-filename">
+            <a href="${href}" target="_blank" rel="noopener" title="${escapeHtml(d.filename)}">${escapeHtml(d.filename)}</a>
+          </div>
+          <div class="doc-chunks">${d.chunk_count}</div>
+          <div class="doc-indexed">${formatDate(d.indexed_at)}</div>
+          <div class="doc-actions"><button type="button" class="danger" data-id="${d.id}">Delete</button></div>`;
+        row.querySelector('button.danger').addEventListener('click', () => deleteDoc(d.id, d.filename));
+        list.appendChild(row);
       }
-      container.appendChild(table);
+      container.appendChild(list);
     } catch (err) {
       container.className = 'card error';
       container.textContent = 'Failed to load documents: ' + err.message;

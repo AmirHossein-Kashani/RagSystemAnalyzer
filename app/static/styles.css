@@ -125,6 +125,74 @@ td a { color: var(--primary); text-decoration: none; }
 td a:hover { text-decoration: underline; }
 tr:last-child td { border-bottom: none; }
 
+/* Documents list — filename truncates; meta columns fixed on the right */
+.docs-list-card {
+  overflow: hidden;
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+.docs-list {
+  width: 100%;
+}
+.docs-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3rem 8.75rem 4.5rem;
+  column-gap: 0.65rem;
+  align-items: center;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.docs-row:last-child {
+  border-bottom: none;
+}
+.docs-header {
+  padding-top: 0.15rem;
+  padding-bottom: 0.45rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.docs-row .doc-filename {
+  min-width: 0;
+  overflow: hidden;
+}
+.docs-row .doc-filename a {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--primary);
+  text-decoration: none;
+}
+.docs-row .doc-filename a:hover {
+  text-decoration: underline;
+}
+.docs-row .doc-chunks {
+  text-align: right;
+  white-space: nowrap;
+}
+.docs-row .doc-indexed {
+  text-align: right;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.docs-header .doc-indexed,
+.docs-header .doc-chunks {
+  text-align: right;
+  color: var(--muted);
+}
+.docs-row .doc-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.docs-row .doc-actions button {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.85rem;
+}
+
 .hit {
   background: var(--surface);
   border: 1px solid var(--border);
