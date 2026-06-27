@@ -134,3 +134,58 @@ class LLMInfo(BaseModel):
     default_temperature: float
     default_system_prompt: str
     max_context_chars: int
+
+
+# ---------- Google Drive ----------
+
+class DriveSourceCreate(BaseModel):
+    url: str = Field(..., min_length=10, max_length=1000)
+
+
+class DriveSourceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    dataset_id: str
+    folder_url: str
+    root_id: str
+    root_name: str
+    is_single_file: bool
+    last_synced_at: Optional[datetime]
+    created_at: datetime
+    file_count: int = 0
+
+
+class DriveFileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    drive_source_id: str
+    drive_file_id: str
+    relative_path: str
+    name: str
+    mime_type: str
+    md5_checksum: Optional[str]
+    modified_time: datetime
+    size: Optional[int]
+    document_id: Optional[str]
+    last_seen_at: datetime
+    last_sync_status: Optional[str]
+
+
+class DriveSyncFileResultOut(BaseModel):
+    relative_path: str
+    drive_file_id: str
+    status: str
+    chunks_added: int = 0
+    message: str = ""
+
+
+class DriveSyncResultOut(BaseModel):
+    listed: int
+    skipped: int
+    indexed: int
+    updated: int
+    unsupported: int
+    errors: int
+    files: list[DriveSyncFileResultOut]

@@ -14,6 +14,7 @@ LLM generate grounded answers from the retrieved passages.
 - SQLite metadata store (Postgres-ready — change one URL)
 - Drag-and-drop multi-file upload with per-file status (web UI)
 - **Folder upload** — pick a folder or drop one onto the upload zone; nested subfolders are expanded and relative paths are preserved (e.g. `policies/2024/handbook.pdf`)
+- **Google Drive sync** — link a public Drive folder URL per dataset; lists remote files first, stores per-file metadata, skips unchanged files on re-sync, indexes only new or modified documents
 - **Calibrated confidence** on every hit: percentage + High / Medium / Low badge, plus an overall verdict banner
 - **LLM-backed answers** via any OpenAI-compatible endpoint (Ollama out of the box, real OpenAI by editing one file)
 - Four LLM-related endpoints: full RAG (`/api/ask`), ask-with-supplied-context (`/api/llm/answer`), direct chat (`/api/llm/chat`), and config inspection (`/api/llm/info`)
@@ -181,10 +182,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 1. Open http://127.0.0.1:8765/ → **Datasets**
 2. Create a dataset (e.g. `policies`)
 3. Open the dataset and **drag files or a folder** onto the upload zone (or click to browse files, or use **Upload folder**). Each supported file gets its own status row: `pending → uploading → ok / skipped / error`. Nested paths inside a folder are kept (e.g. `docs/guide.md`).
-4. Go to **Search**, pick the dataset, type a question
+4. Optionally, under **Google Drive**, paste a public folder link and click **Link folder** — the first sync runs automatically; use **Sync now** later to fetch new or changed files only.
+5. Go to **Search**, pick the dataset, type a question
    - Click **Search** to get ranked passages with confidence badges
    - Click **Ask LLM** to additionally have the configured LLM generate a grounded answer that cites the passages it used
-5. Each result card shows the passage, a colored confidence badge (`HIGH / MEDIUM / LOW · NN%`), and its reference (filename + chunk index + dataset). An overall verdict banner above the results summarizes the response confidence.
+6. Each result card shows the passage, a colored confidence badge (`HIGH / MEDIUM / LOW · NN%`), and its reference (filename + chunk index + dataset). An overall verdict banner above the results summarizes the response confidence.
 
 ## REST API
 
@@ -201,6 +203,16 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 | POST   | `/api/datasets/{id}/documents/upload`          | Multipart upload + index (one file per call) |
 | DELETE | `/api/datasets/{id}/documents/{doc_id}`        | Remove a document |
 
+### Google Drive sync
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST   | `/api/datasets/{id}/drive/sources` | Link a public Drive folder/file URL `{url}` |
+| GET    | `/api/datasets/{id}/drive/sources` | List linked Drive sources |
+| GET    | `/api/datasets/{id}/drive/sources/{source_id}/files` | Cached remote file metadata (snapshots) |
+| POST   | `/api/datasets/{id}/drive/sources/{source_id}/sync` | Incremental sync — list, compare metadata, index new/changed only |
+| DELETE | `/api/datasets/{id}/drive/sources/{source_id}` | Remove link + snapshots (indexed documents stay) |
+
 ### Search, ask, and LLM
 
 | Method | Path | Purpose |
@@ -214,6 +226,43 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 `top_k` is optional (defaults to `RAG_DEFAULT_TOP_K`). `temperature`, `model`, and `system_prompt` can be overridden per request on the LLM endpoints.
 
 See `/docs` for the full interactive Swagger spec.
+
+## Google Drive sync
+
+Drive sync works with **public** folders shared as **Anyone with the link can view**. No Google user sign-in is required on the server, but you must configure a **Google Cloud API key** (free tier is fine).
+
+### One-time API key setup
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) → create or select a project
+2. Enable **Google Drive API**
+3. **Credentials** → **Create credentials** → **API key**
+4. Restrict the key to the Drive API (recommended)
+5. Add to `.env`:
+
+```env
+RAG_GOOGLE_API_KEY=your-api-key-here
+```
+
+6. Share the Drive folder as **Anyone with the link can view**
+
+Restart the server after changing `.env`.
+
+### Sync behavior
+
+1. **List** — recursively walks the linked folder via Drive API v3
+2. **Compare** — each remote file is matched by Google file ID; stored metadata includes `modifiedTime`, `md5Checksum` (when available), and `size`
+3. **Skip** — unchanged files are not re-downloaded or re-embedded
+4. **Index** — new or modified supported files are downloaded to `data/docs/{dataset_id}/drive/{source_id}/…` and indexed as `{root_name}/{relative_path}`
+
+Supported from Drive: PDF, plain text, markdown, HTML, and native Google Docs (exported as `.txt`). Other types are listed in metadata but marked `unsupported`.
+
+### Limitations (v1)
+
+- Public links + API key only (no OAuth or service account)
+- Manual **Sync now** only (no background scheduler)
+- Removing a Drive link does **not** delete already-indexed documents
+- Files removed from Drive are **not** auto-deleted from the dataset
+- Native Google Sheets/Slides are not supported
 
 ## LLM configuration
 
@@ -276,6 +325,10 @@ RAG_COLLECTION_NAME=documents
 RAG_CONFIDENCE_FULL_SCORE=0.60
 RAG_CONFIDENCE_HIGH_THRESHOLD=0.70
 RAG_CONFIDENCE_MEDIUM_THRESHOLD=0.40
+
+# Google Drive sync (see "Google Drive sync" section above)
+RAG_GOOGLE_API_KEY=
+RAG_DRIVE_REQUEST_TIMEOUT_SECONDS=60
 ```
 
 To migrate to PostgreSQL later:
@@ -306,6 +359,7 @@ app/
   schemas.py       # Pydantic request/response (datasets, search, ask, llm)
   repository.py    # SQL CRUD helpers
   paths.py         # upload path sanitization
+  drive/           # public Drive client + incremental sync
   loader.py        # file -> text (.txt/.md/.pdf/.html)
   chunker.py       # text -> overlapping windows
   embedder.py      # sentence-transformers wrapper (CPU, normalized)
@@ -318,6 +372,7 @@ app/
   main.py          # app factory + lifespan + router mounting
   routers/
     datasets.py    # /api/datasets/*
+    drive.py       # /api/datasets/{id}/drive/*
     search.py      # /api/search
     ask.py         # /api/ask (retrieve + LLM)
     llm.py         # /api/llm/{info, answer, chat}
@@ -342,6 +397,8 @@ requirements.txt
 - **First search/upload is slow** — the embedding model loads lazily on first use; subsequent calls are fast.
 - **Re-upload returns `status: "skipped"`** — SHA-256 matched; the file content is unchanged. Edit (or rename) the file to force re-indexing.
 - **`/api/ask` returns 502** — the LLM endpoint is unreachable. Check that `llm_config.json` points at a live server, the API key is correct, and (for ngrok-fronted Ollama) the `ngrok-skip-browser-warning` header is present. `GET /api/llm/info` is a quick health probe.
+- **Drive sync returns 503** — set `RAG_GOOGLE_API_KEY` in `.env` and restart.
+- **Drive sync returns 502 / 403** — confirm the folder is shared as **Anyone with the link can view** and the API key has Drive API enabled.
 - **`llm_config.json` changes don't take effect** — the config is cached per process via `lru_cache`. Restart the server after edits.
 
 ## Notes

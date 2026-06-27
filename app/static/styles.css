@@ -173,6 +173,25 @@ tr:last-child td { border-bottom: none; }
   text-align: center;
 }
 
+.drive-link-form {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.drive-link-form input[type="url"] {
+  flex: 1 1 280px;
+}
+.drive-sources { margin-top: 1rem; }
+.drive-sources.empty { color: var(--muted); padding: 0.5rem 0; }
+.drive-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.drive-actions button { padding: 0.35rem 0.75rem; font-size: 0.9rem; }
+
 .upload-queue {
   list-style: none;
   padding: 0;

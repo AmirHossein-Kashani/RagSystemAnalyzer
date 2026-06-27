@@ -27,6 +27,19 @@
 </section>
 
 <section>
+  <h2>Google Drive</h2>
+  <p class="muted small">Link a public Drive folder (Anyone with the link can view). Requires <code>RAG_GOOGLE_API_KEY</code> on the server.</p>
+  <div class="card">
+    <form id="drive-link-form" class="drive-link-form">
+      <input type="url" id="drive-url" placeholder="https://drive.google.com/drive/folders/..." required />
+      <button type="submit" class="primary">Link folder</button>
+    </form>
+    <div id="drive-sources" class="drive-sources empty">Loading Drive sources...</div>
+    <ul id="drive-sync-queue" class="upload-queue hidden"></ul>
+  </div>
+</section>
+
+<section>
   <h2>Documents</h2>
   <div id="docs-list" class="card empty">Loading...</div>
 </section>
@@ -180,6 +193,130 @@
     }
   });
 
+  // ----- Google Drive sync -----
+  const driveSourcesEl = document.getElementById('drive-sources');
+  const driveSyncQueue = document.getElementById('drive-sync-queue');
+  const driveLinkForm = document.getElementById('drive-link-form');
+  const driveUrlInput = document.getElementById('drive-url');
+
+  function syncStatusClass(status) {
+    if (status === 'skipped' || status === 'unsupported') return 'skipped';
+    if (status === 'indexed' || status === 'updated') return 'ok';
+    if (status === 'error') return 'error';
+    return 'pending';
+  }
+
+  function showDriveSyncResults(files) {
+    driveSyncQueue.innerHTML = '';
+    if (!files.length) {
+      driveSyncQueue.classList.add('hidden');
+      return;
+    }
+    driveSyncQueue.classList.remove('hidden');
+    for (const f of files) {
+      const row = document.createElement('li');
+      row.className = 'queue-row';
+      row.innerHTML = `
+        <span class="filename"></span>
+        <span class="filesize"></span>
+        <span class="status"></span>`;
+      row.querySelector('.filename').textContent = f.relative_path;
+      row.querySelector('.filesize').textContent = f.drive_file_id.slice(0, 8);
+      const label = f.message ? `${f.status}: ${f.message}` : `${f.status}${f.chunks_added ? ' · ' + f.chunks_added + ' chunks' : ''}`;
+      setStatus(row, syncStatusClass(f.status), label);
+      driveSyncQueue.appendChild(row);
+    }
+  }
+
+  async function loadDriveSources() {
+    try {
+      const sources = await api.get(`/api/datasets/${encodeURIComponent(DATASET_ID)}/drive/sources`);
+      if (!sources.length) {
+        driveSourcesEl.className = 'drive-sources empty';
+        driveSourcesEl.textContent = 'No Drive folders linked yet.';
+        return;
+      }
+      driveSourcesEl.className = 'drive-sources';
+      driveSourcesEl.innerHTML = '';
+      const table = document.createElement('table');
+      table.innerHTML = `
+        <thead><tr><th>Name</th><th>Last synced</th><th>Files</th><th></th></tr></thead>
+        <tbody></tbody>`;
+      const tbody = table.querySelector('tbody');
+      for (const s of sources) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>
+            <div>${escapeHtml(s.root_name)}</div>
+            <div class="muted small"><a href="${escapeHtml(s.folder_url)}" target="_blank" rel="noopener">Open in Drive</a></div>
+          </td>
+          <td>${s.last_synced_at ? formatDate(s.last_synced_at) : 'Never'}</td>
+          <td>${s.file_count}</td>
+          <td class="drive-actions">
+            <button type="button" class="secondary" data-sync="${s.id}">Sync now</button>
+            <button type="button" class="danger" data-remove="${s.id}">Remove</button>
+          </td>`;
+        tr.querySelector('[data-sync]').addEventListener('click', () => syncDriveSource(s.id, s.root_name));
+        tr.querySelector('[data-remove]').addEventListener('click', () => removeDriveSource(s.id, s.root_name));
+        tbody.appendChild(tr);
+      }
+      driveSourcesEl.appendChild(table);
+    } catch (err) {
+      driveSourcesEl.className = 'drive-sources error card error';
+      driveSourcesEl.textContent = 'Failed to load Drive sources: ' + err.message;
+    }
+  }
+
+  async function syncDriveSource(sourceId, name) {
+    const btn = document.querySelector(`[data-sync="${sourceId}"]`);
+    if (btn) btn.disabled = true;
+    driveSyncQueue.classList.remove('hidden');
+    driveSyncQueue.innerHTML = `<li class="queue-row"><span class="filename">Syncing ${escapeHtml(name)}...</span><span></span><span class="status status-uploading">working</span></li>`;
+    try {
+      const res = await api.post(`/api/datasets/${encodeURIComponent(DATASET_ID)}/drive/sources/${encodeURIComponent(sourceId)}/sync`, {});
+      showDriveSyncResults(res.files || []);
+      toast(`Drive sync done: ${res.indexed} indexed, ${res.skipped} skipped, ${res.errors} errors`);
+      loadDocs();
+      loadDriveSources();
+    } catch (err) {
+      driveSyncQueue.innerHTML = '';
+      toast('Drive sync failed: ' + err.message, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function removeDriveSource(sourceId, name) {
+    if (!confirm(`Remove Drive link "${name}"? Indexed documents will stay in this dataset.`)) return;
+    try {
+      await api.del(`/api/datasets/${encodeURIComponent(DATASET_ID)}/drive/sources/${encodeURIComponent(sourceId)}`);
+      toast(`Removed Drive link "${name}"`);
+      loadDriveSources();
+    } catch (err) {
+      toast('Remove failed: ' + err.message, true);
+    }
+  }
+
+  driveLinkForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = driveUrlInput.value.trim();
+    if (!url) return;
+    const btn = driveLinkForm.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      const source = await api.post(`/api/datasets/${encodeURIComponent(DATASET_ID)}/drive/sources`, { url });
+      toast(`Linked Drive folder "${source.root_name}"`);
+      driveUrlInput.value = '';
+      await loadDriveSources();
+      await syncDriveSource(source.id, source.root_name);
+    } catch (err) {
+      toast('Link failed: ' + err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   loadDocs();
+  loadDriveSources();
 </script>
 {% endblock %}

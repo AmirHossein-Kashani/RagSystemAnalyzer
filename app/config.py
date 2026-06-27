@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     confidence_high_threshold: float = 0.70
     confidence_medium_threshold: float = 0.40
 
+    # Google Drive sync (public folders; server-side API key only).
+    google_api_key: str = ""
+    drive_request_timeout_seconds: int = 60
+
     templates_dir: Path = Path("app/templates")
     static_dir: Path = Path("app/static")
 
