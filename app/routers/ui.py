@@ -64,3 +64,8 @@ def mapping_plan_detail_page(
         "mapping_plan.html",
         {"plan_id": plan.id, "plan_name": plan.name},
     )
+
+
+@router.get("/debug", response_class=HTMLResponse)
+def debug_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "debug.html", {})
