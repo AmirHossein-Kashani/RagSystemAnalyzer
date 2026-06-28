@@ -78,6 +78,46 @@ class SearchResponse(BaseModel):
     overall_message: str
 
 
+# ---------- Debug (embedding visualization) ----------
+
+class DebugRetrieveRequest(BaseModel):
+    dataset_id: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(5, ge=1, le=50)
+
+
+class DebugProjection(BaseModel):
+    x: float
+    y: float
+
+
+class DebugHit(BaseModel):
+    id: str
+    text: str
+    score: float
+    confidence: float
+    confidence_label: str
+    embedding: list[float]
+    reference: SearchReference
+    metadata: dict
+    projection: DebugProjection
+
+
+class DebugRetrieveResponse(BaseModel):
+    query: str
+    dataset_id: str
+    embedding_model: str
+    dimension: int
+    query_embedding: list[float]
+    query_projection: DebugProjection
+    hits: list[DebugHit]
+    overall_confidence: str
+    overall_confidence_score: float
+    overall_message: str
+    similarity_matrix: list[list[float]]
+    similarity_labels: list[str]
+
+
 # ---------- Ask (RAG) ----------
 
 class AskRequest(BaseModel):
@@ -94,6 +134,33 @@ class AskResponse(BaseModel):
     model: str
     provider: str
     search: SearchResponse  # the retrieval used as context (with references + confidence)
+
+
+# ---------- Entity Ask (agentic multi-hop RAG) ----------
+
+class EntityAskRequest(BaseModel):
+    dataset_id: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1)
+    # How many passages to retrieve for EACH entity the LLM identifies.
+    per_entity_top_k: int = Field(5, ge=1, le=20)
+    # Cap on how many entities/subjects the LLM may plan searches for.
+    max_entities: int = Field(5, ge=1, le=12)
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+
+
+class EntitySearch(BaseModel):
+    """One planned entity and the retrieval it produced."""
+    entity: str
+    search: SearchResponse
+
+
+class EntityAskResponse(BaseModel):
+    query: str
+    dataset_id: str
+    answer: str            # the LLM's final decision, synthesized across entities
+    model: str
+    provider: str
+    entities: list[EntitySearch]
 
 
 # ---------- LLM (direct, caller-supplied context) ----------

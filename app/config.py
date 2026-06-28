@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # Confidence calibration (tuned for sentence-transformers/all-MiniLM-L6-v2).
     # Raw cosine at/above `full_score` maps to 100% confidence; the two thresholds
     # split the resulting 0..1 confidence into high / medium / low labels.
-    confidence_full_score: float = 0.60
+    confidence_full_score: float = 1
     confidence_high_threshold: float = 0.70
     confidence_medium_threshold: float = 0.40
 

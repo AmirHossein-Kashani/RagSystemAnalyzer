@@ -1,0 +1,389 @@
+{% extends "base.html" %}
+{% block title %}Debug Embeddings{% endblock %}
+{% block container_class %}container-wide{% endblock %}
+
+{% block content %}
+<section>
+  <h1>Embedding Debug</h1>
+  <p class="muted">Run a retrieval and inspect query + chunk embeddings: 2D PCA projection, cosine similarity matrix, and vector previews.</p>
+
+  <form id="debug-form" class="card">
+    <div class="field">
+      <label for="dataset">Dataset</label>
+      <select id="dataset" required>
+        <option value="" disabled selected>Loading datasets...</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="query">Query</label>
+      <textarea id="query" rows="2" required placeholder="Same query you'd use in Search"></textarea>
+    </div>
+    <div class="field inline">
+      <label for="top_k">Top K</label>
+      <input id="top_k" type="number" min="1" max="50" value="5" />
+    </div>
+    <div class="actions">
+      <button type="submit" id="retrieve-btn" class="primary">Retrieve &amp; Visualize</button>
+    </div>
+  </form>
+</section>
+
+<section id="results-section" class="hidden">
+  <dl id="debug-meta" class="debug-meta card"></dl>
+
+  <div class="debug-layout">
+    <div class="debug-panel">
+      <h3>2D PCA Projection</h3>
+      <div class="scatter-wrap">
+        <canvas id="scatter" width="560" height="420"></canvas>
+        <div id="scatter-tooltip" class="scatter-tooltip"></div>
+      </div>
+      <div class="scatter-legend">
+        <span><i class="legend-dot query"></i> Query</span>
+        <span><i class="legend-dot high"></i> High confidence</span>
+        <span><i class="legend-dot medium"></i> Medium</span>
+        <span><i class="legend-dot low"></i> Low</span>
+      </div>
+    </div>
+
+    <div class="debug-panel">
+      <h3>Cosine Similarity Matrix</h3>
+      <div id="sim-matrix" class="sim-table-wrap empty muted">Run a retrieval to see similarities.</div>
+    </div>
+  </div>
+
+  <h2>Retrieved Chunks</h2>
+  <div id="verdict" class="verdict hidden"></div>
+  <div id="hits"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let lastData = null;
+  let scatterPoints = [];
+
+  const LABEL_COLORS = {
+    high: '#1d6a37',
+    medium: '#b07300',
+    low: '#962a1f',
+    none: '#6b7280',
+  };
+
+  async function loadDatasets() {
+    const select = document.getElementById('dataset');
+    try {
+      const items = await api.get('/api/datasets');
+      const params = new URLSearchParams(window.location.search);
+      const preselect = params.get('dataset_id');
+      if (!items.length) {
+        select.innerHTML = '<option value="" disabled selected>No datasets — create one first</option>';
+        return;
+      }
+      select.innerHTML = '';
+      for (const d of items) {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = `${d.name}  (${d.document_count} docs)`;
+        if (preselect && d.id === preselect) opt.selected = true;
+        select.appendChild(opt);
+      }
+    } catch (err) {
+      select.innerHTML = `<option value="" disabled selected>Failed to load: ${escapeHtml(err.message)}</option>`;
+    }
+  }
+
+  function readForm() {
+    const dataset_id = document.getElementById('dataset').value;
+    const query = document.getElementById('query').value.trim();
+    const top_k = parseInt(document.getElementById('top_k').value, 10) || 5;
+    return (dataset_id && query) ? { dataset_id, query, top_k } : null;
+  }
+
+  function embeddingPreview(vec, dim) {
+    if (!vec || !vec.length) return '(no vector)';
+    const head = vec.slice(0, 6).map(v => v.toFixed(4)).join(', ');
+    const tail = vec.length > 6
+      ? ' … ' + vec.slice(-3).map(v => v.toFixed(4)).join(', ')
+      : '';
+    let norm = 0;
+    for (const v of vec) norm += v * v;
+    norm = Math.sqrt(norm);
+    return `[${head}${tail}]  ·  dim=${dim}  ·  L2=${norm.toFixed(4)}`;
+  }
+
+  function simColor(value) {
+    const t = Math.max(-1, Math.min(1, value));
+    const pct = (t + 1) / 2;
+    const r = Math.round(255 - pct * 180);
+    const g = Math.round(100 + pct * 120);
+    const b = Math.round(220 - pct * 160);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  function renderMeta(data) {
+    const dl = document.getElementById('debug-meta');
+    dl.innerHTML = `
+      <div><dt>Model</dt><dd>${escapeHtml(data.embedding_model)}</dd></div>
+      <div><dt>Dimension</dt><dd>${data.dimension}</dd></div>
+      <div><dt>Hits</dt><dd>${data.hits.length}</dd></div>
+      <div><dt>Query vector</dt><dd>${escapeHtml(embeddingPreview(data.query_embedding, data.dimension))}</dd></div>`;
+  }
+
+  function renderVerdict(data) {
+    const banner = document.getElementById('verdict');
+    const label = data.overall_confidence || 'none';
+    const pct = Math.round((data.overall_confidence_score || 0) * 100);
+    banner.className = `verdict verdict-${label}`;
+    if (label === 'none' || !data.hits.length) {
+      banner.textContent = data.overall_message;
+    } else {
+      banner.innerHTML = `${escapeHtml(data.overall_message)} <span class="verdict-pct">${pct}% confidence</span>`;
+    }
+    banner.classList.remove('hidden');
+  }
+
+  function renderSimMatrix(data) {
+    const wrap = document.getElementById('sim-matrix');
+    const matrix = data.similarity_matrix;
+    const labels = data.similarity_labels;
+    if (!matrix.length) {
+      wrap.className = 'sim-table-wrap empty muted';
+      wrap.textContent = 'No hits to compare.';
+      return;
+    }
+
+    let html = '<table class="sim-table"><thead><tr><th></th>';
+    for (const lbl of labels) {
+      html += `<th title="${escapeHtml(lbl)}">${escapeHtml(lbl)}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+
+    matrix.forEach((row, i) => {
+      html += `<tr><th class="sim-label" title="${escapeHtml(labels[i])}">${escapeHtml(labels[i])}</th>`;
+      row.forEach((val, j) => {
+        const bg = simColor(val);
+        const text = i === j ? '1.000' : val.toFixed(3);
+        html += `<td style="background:${bg}" title="cosine ${val.toFixed(4)}">${text}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.className = 'sim-table-wrap';
+    wrap.innerHTML = html;
+  }
+
+  function renderHits(data) {
+    const container = document.getElementById('hits');
+    renderVerdict(data);
+    if (!data.hits.length) {
+      container.className = 'empty';
+      container.textContent = 'No matches.';
+      return;
+    }
+    container.className = '';
+    container.innerHTML = '';
+    data.hits.forEach((hit, i) => {
+      const ref = hit.reference;
+      const pct = Math.round((hit.confidence || 0) * 100);
+      const label = hit.confidence_label || 'low';
+      const card = document.createElement('article');
+      card.className = 'hit debug-hit';
+      card.dataset.index = i;
+      card.innerHTML = `
+        <header>
+          <span class="rank">#${i + 1}</span>
+          <span class="badge badge-${label}" title="cosine similarity ${hit.score.toFixed(3)}">
+            ${label.toUpperCase()} &middot; ${pct}%
+          </span>
+          <span class="chunk-id">${escapeHtml(hit.id)}</span>
+        </header>
+        <p class="passage">${escapeHtml(hit.text)}</p>
+        <div class="embedding-preview">${escapeHtml(embeddingPreview(hit.embedding, data.dimension))}</div>
+        <footer class="ref">
+          <strong>${escapeHtml(ref.filename)}</strong>
+          <span class="muted">chunk ${ref.chunk_index} &middot; proj (${hit.projection.x.toFixed(3)}, ${hit.projection.y.toFixed(3)})</span>
+        </footer>`;
+      card.addEventListener('mouseenter', () => highlightPoint(i));
+      card.addEventListener('mouseleave', () => highlightPoint(-1));
+      container.appendChild(card);
+    });
+  }
+
+  function projectToCanvas(proj, bounds, width, height, pad) {
+    const rangeX = bounds.maxX - bounds.minX || 1;
+    const rangeY = bounds.maxY - bounds.minY || 1;
+    const x = pad + ((proj.x - bounds.minX) / rangeX) * (width - 2 * pad);
+    const y = height - pad - ((proj.y - bounds.minY) / rangeY) * (height - 2 * pad);
+    return { x, y };
+  }
+
+  function computeBounds(data) {
+    const points = [data.query_projection, ...data.hits.map(h => h.projection)];
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of points) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
+    }
+    const padX = (maxX - minX) * 0.15 || 0.5;
+    const padY = (maxY - minY) * 0.15 || 0.5;
+    return { minX: minX - padX, maxX: maxX + padX, minY: minY - padY, maxY: maxY + padY };
+  }
+
+  function drawScatter(data, highlightIndex = -1) {
+    const canvas = document.getElementById('scatter');
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const w = rect.width;
+    const h = rect.height;
+    const pad = 36;
+    const bounds = computeBounds(data);
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#fafbff';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = '#e3e5ec';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad, h / 2);
+    ctx.lineTo(w - pad, h / 2);
+    ctx.moveTo(w / 2, pad);
+    ctx.lineTo(w / 2, h - pad);
+    ctx.stroke();
+
+    scatterPoints = [];
+
+    data.hits.forEach((hit, i) => {
+      const pos = projectToCanvas(hit.projection, bounds, w, h, pad);
+      const color = LABEL_COLORS[hit.confidence_label] || LABEL_COLORS.none;
+      const radius = highlightIndex === i ? 11 : 8;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = highlightIndex >= 0 && highlightIndex !== i ? 0.35 : 1;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = highlightIndex === i ? '#2950e6' : '#fff';
+      ctx.lineWidth = highlightIndex === i ? 2.5 : 1.5;
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), pos.x, pos.y);
+      scatterPoints.push({
+        x: pos.x, y: pos.y, radius: radius + 4,
+        label: `#${i + 1} ${hit.reference.filename} (chunk ${hit.reference.chunk_index})`,
+        index: i,
+      });
+    });
+
+    const qpos = projectToCanvas(data.query_projection, bounds, w, h, pad);
+    ctx.beginPath();
+    const r = 10;
+    for (let i = 0; i < 5; i++) {
+      const angle = (Math.PI * 2 * i) / 5 - Math.PI / 2;
+      const x = qpos.x + r * Math.cos(angle);
+      const y = qpos.y + r * Math.sin(angle);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#2950e6';
+    ctx.fill();
+    ctx.strokeStyle = '#1e3fc1';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    scatterPoints.push({
+      x: qpos.x, y: qpos.y, radius: 14,
+      label: 'Query',
+      index: -1,
+    });
+  }
+
+  function highlightPoint(index) {
+    if (!lastData) return;
+    document.querySelectorAll('.debug-hit').forEach((el, i) => {
+      el.classList.toggle('selected', i === index);
+    });
+    drawScatter(lastData, index);
+  }
+
+  function setupScatterHover() {
+    const canvas = document.getElementById('scatter');
+    const tip = document.getElementById('scatter-tooltip');
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      let found = null;
+      for (const pt of scatterPoints) {
+        const dx = mx - pt.x;
+        const dy = my - pt.y;
+        if (dx * dx + dy * dy <= pt.radius * pt.radius) {
+          found = pt;
+          break;
+        }
+      }
+      if (found) {
+        tip.textContent = found.label;
+        tip.style.left = (found.x + 12) + 'px';
+        tip.style.top = (found.y - 28) + 'px';
+        tip.classList.add('visible');
+        if (found.index >= 0) highlightPoint(found.index);
+        else highlightPoint(-1);
+      } else {
+        tip.classList.remove('visible');
+      }
+    });
+    canvas.addEventListener('mouseleave', () => {
+      tip.classList.remove('visible');
+      highlightPoint(-1);
+    });
+  }
+
+  function renderAll(data) {
+    lastData = data;
+    document.getElementById('results-section').classList.remove('hidden');
+    renderMeta(data);
+    renderSimMatrix(data);
+    renderHits(data);
+    drawScatter(data);
+  }
+
+  async function runRetrieve() {
+    const params = readForm();
+    if (!params) return;
+    const btn = document.getElementById('retrieve-btn');
+    btn.disabled = true;
+    document.getElementById('results-section').classList.add('hidden');
+    try {
+      const data = await api.post('/api/debug/retrieve', params);
+      renderAll(data);
+    } catch (err) {
+      toast('Retrieve failed: ' + err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('debug-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    runRetrieve();
+  });
+
+  window.addEventListener('resize', () => {
+    if (lastData) drawScatter(lastData);
+  });
+
+  loadDatasets();
+  setupScatterHover();
+</script>
+{% endblock %}

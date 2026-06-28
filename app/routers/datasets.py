@@ -53,7 +53,7 @@ def get_dataset(dataset_id: str, session: SessionDep) -> DatasetOut:
     return _dataset_to_out(dataset)
 
 
-@router.delete("/{dataset_id}", status_code=204)
+@router.delete("/{dataset_id}", status_code=204, response_model=None)
 def delete_dataset(
     dataset_id: str, session: SessionDep, indexer: IndexerDep
 ) -> None:
@@ -139,7 +139,7 @@ def download_document(
     )
 
 
-@router.delete("/{dataset_id}/documents/{doc_id}", status_code=204)
+@router.delete("/{dataset_id}/documents/{doc_id}", status_code=204, response_model=None)
 def delete_document(
     dataset_id: str, doc_id: str, session: SessionDep, indexer: IndexerDep
 ) -> None:

@@ -4,30 +4,62 @@
 {% block content %}
 <section>
   <h1>Search</h1>
-  <p class="muted">Pick a dataset, ask a question, and get back the most relevant passages with their references.</p>
+  <p class="muted">Search the RAG index directly, or let the LLM plan entity searches and synthesize an answer.</p>
 
-  <form id="search-form" class="card">
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab active" data-tab="search">Search</button>
+    <button type="button" class="tab" data-tab="ask">Ask LLM</button>
+  </div>
+
+  <!-- ===== Search panel (RAG only) ===== -->
+  <form id="search-panel" class="card tab-panel">
     <div class="field">
-      <label for="dataset">Dataset</label>
-      <select id="dataset" required>
+      <label for="s-dataset">Dataset</label>
+      <select id="s-dataset" class="dataset-select" required>
         <option value="" disabled selected>Loading datasets...</option>
       </select>
     </div>
     <div class="field">
-      <label for="query">Query</label>
-      <textarea id="query" rows="3" required placeholder="What do you want to know?"></textarea>
+      <label for="s-query">Query</label>
+      <textarea id="s-query" rows="3" required placeholder="What do you want to know?"></textarea>
     </div>
     <div class="field inline">
-      <label for="top_k">Top K</label>
-      <input id="top_k" type="number" min="1" max="50" value="5" />
+      <label for="s-top_k">Top K</label>
+      <input id="s-top_k" type="number" min="1" max="50" value="5" />
     </div>
     <div class="actions">
       <button type="button" id="search-btn" class="primary">Search</button>
-      <button type="button" id="ask-btn" class="button">Ask LLM</button>
+    </div>
+  </form>
+
+  <!-- ===== Ask LLM panel (entity-based agentic RAG) ===== -->
+  <form id="ask-panel" class="card tab-panel hidden">
+    <p class="muted small">The LLM first identifies entities to search for, retrieves passages for each, then makes a final decision.</p>
+    <div class="field">
+      <label for="a-dataset">Dataset</label>
+      <select id="a-dataset" class="dataset-select" required>
+        <option value="" disabled selected>Loading datasets...</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="a-query">Question</label>
+      <textarea id="a-query" rows="3" required placeholder="Ask a question; the LLM will decide which entities to search for."></textarea>
+    </div>
+    <div class="field inline">
+      <label for="a-per-entity" title="How many passages to retrieve for each entity the LLM identifies.">Retrievals per entity</label>
+      <input id="a-per-entity" type="number" min="1" max="20" value="5" />
+    </div>
+    <div class="field inline">
+      <label for="a-max-entities" title="Maximum number of entities the LLM may plan searches for.">Max entities</label>
+      <input id="a-max-entities" type="number" min="1" max="12" value="5" />
+    </div>
+    <div class="actions">
+      <button type="button" id="ask-btn" class="primary">Ask LLM</button>
     </div>
   </form>
 </section>
 
+<!-- ===== Final answer (Ask mode) ===== -->
 <section id="answer-section" class="hidden">
   <h2>Answer</h2>
   <article id="answer" class="answer">
@@ -38,37 +70,117 @@
   </article>
 </section>
 
-<section>
+<!-- ===== Per-entity searches (Ask mode) ===== -->
+<section id="entities-section" class="hidden">
+  <h2>Entity searches</h2>
+  <div id="entities" class="empty">Ask the LLM to see the entities it searched for here.</div>
+</section>
+
+<!-- ===== References (Search mode) ===== -->
+<section id="references-section">
   <h2>References</h2>
   <div id="verdict" class="verdict hidden"></div>
-  <div id="results" class="empty">Run a search or ask the LLM to see results here.</div>
+  <div id="results" class="empty">Run a search to see results here.</div>
 </section>
 {% endblock %}
 
 {% block scripts %}
 <script>
+  let askAnswered = false;
+
   async function loadDatasets() {
-    const select = document.getElementById('dataset');
+    const selects = [...document.querySelectorAll('.dataset-select')];
     try {
       const items = await api.get('/api/datasets');
       const params = new URLSearchParams(window.location.search);
       const preselect = params.get('dataset_id');
       if (!items.length) {
-        select.innerHTML = '<option value="" disabled selected>No datasets — create one first</option>';
+        selects.forEach((s) => {
+          s.innerHTML = '<option value="" disabled selected>No datasets — create one first</option>';
+        });
         return;
       }
-      select.innerHTML = '';
-      for (const d of items) {
-        const opt = document.createElement('option');
-        opt.value = d.id;
-        opt.textContent = `${d.name}  (${d.document_count} docs)`;
-        if (preselect && d.id === preselect) opt.selected = true;
-        select.appendChild(opt);
-      }
+      selects.forEach((select) => {
+        select.innerHTML = '';
+        for (const d of items) {
+          const opt = document.createElement('option');
+          opt.value = d.id;
+          opt.textContent = `${d.name}  (${d.document_count} docs)`;
+          if (preselect && d.id === preselect) opt.selected = true;
+          select.appendChild(opt);
+        }
+      });
     } catch (err) {
-      select.innerHTML = `<option value="" disabled selected>Failed to load: ${escapeHtml(err.message)}</option>`;
+      selects.forEach((s) => {
+        s.innerHTML = `<option value="" disabled selected>Failed to load: ${escapeHtml(err.message)}</option>`;
+      });
     }
   }
+
+  // ----- Tab switching -----
+
+  function currentMode() {
+    const active = document.querySelector('.tab.active');
+    return active ? active.dataset.tab : 'search';
+  }
+
+  // Carry the dataset + query across tabs so a typed question isn't lost when switching.
+  function syncSharedFields(from, to) {
+    const map = {
+      search: { ds: 's-dataset', q: 's-query' },
+      ask: { ds: 'a-dataset', q: 'a-query' },
+    };
+    const f = map[from];
+    const t = map[to];
+    const q = document.getElementById(f.q).value;
+    const ds = document.getElementById(f.ds).value;
+    if (q) document.getElementById(t.q).value = q;
+    if (ds) document.getElementById(t.ds).value = ds;
+  }
+
+  function showMode(name) {
+    document.querySelectorAll('.tab').forEach((t) => {
+      t.classList.toggle('active', t.dataset.tab === name);
+    });
+    document.getElementById('search-panel').classList.toggle('hidden', name !== 'search');
+    document.getElementById('ask-panel').classList.toggle('hidden', name !== 'ask');
+    document.getElementById('references-section').classList.toggle('hidden', name !== 'search');
+    document.getElementById('entities-section').classList.toggle('hidden', name !== 'ask');
+    document.getElementById('answer-section').classList.toggle('hidden', !(name === 'ask' && askAnswered));
+  }
+
+  // ----- Shared rendering -----
+
+  function hitCardHtml(hit, i) {
+    const ref = hit.reference;
+    const pct = Math.round((hit.confidence || 0) * 100);
+    const label = hit.confidence_label || 'low';
+    return `
+      <article class="hit">
+        <header>
+          <span class="rank">#${i + 1}</span>
+          <span class="badge badge-${label}" title="cosine similarity ${hit.score.toFixed(3)}">
+            ${label.toUpperCase()} &middot; ${pct}%
+          </span>
+        </header>
+        <p class="passage">${escapeHtml(hit.text)}</p>
+        <footer class="ref">
+          <strong>${escapeHtml(ref.filename)}</strong>
+          <span class="muted">chunk ${ref.chunk_index} &middot; dataset "${escapeHtml(ref.dataset_name)}"</span>
+        </footer>
+      </article>`;
+  }
+
+  function renderAnswer(data) {
+    const section = document.getElementById('answer-section');
+    const body = document.querySelector('#answer .answer-body');
+    const head = document.querySelector('#answer .answer-model');
+    body.textContent = data.answer || '(no answer)';
+    head.textContent = `${data.provider} · ${data.model}`;
+    section.classList.remove('hidden');
+  }
+
+  // ----- Search mode -----
 
   function renderVerdict(data) {
     const banner = document.getElementById('verdict');
@@ -92,106 +204,135 @@
       return;
     }
     container.className = '';
-    container.innerHTML = '';
-    data.hits.forEach((hit, i) => {
-      const ref = hit.reference;
-      const pct = Math.round((hit.confidence || 0) * 100);
-      const label = hit.confidence_label || 'low';
-      const card = document.createElement('article');
-      card.className = 'hit';
-      card.innerHTML = `
-        <header>
-          <span class="rank">#${i + 1}</span>
-          <span class="badge badge-${label}" title="cosine similarity ${hit.score.toFixed(3)}">
-            ${label.toUpperCase()} &middot; ${pct}%
-          </span>
-        </header>
-        <p class="passage">${escapeHtml(hit.text)}</p>
-        <footer class="ref">
-          <strong>${escapeHtml(ref.filename)}</strong>
-          <span class="muted">chunk ${ref.chunk_index} &middot; dataset "${escapeHtml(ref.dataset_name)}"</span>
-        </footer>`;
-      container.appendChild(card);
-    });
+    container.innerHTML = data.hits.map((hit, i) => hitCardHtml(hit, i)).join('');
   }
 
-  function readForm() {
-    const dataset_id = document.getElementById('dataset').value;
-    const query = document.getElementById('query').value.trim();
-    const top_k = parseInt(document.getElementById('top_k').value, 10) || 5;
+  function readSearchForm() {
+    const dataset_id = document.getElementById('s-dataset').value;
+    const query = document.getElementById('s-query').value.trim();
+    const top_k = parseInt(document.getElementById('s-top_k').value, 10) || 5;
     return (dataset_id && query) ? { dataset_id, query, top_k } : null;
   }
 
-  function setBusy(message, hideAnswer = true) {
-    const container = document.getElementById('results');
+  async function runSearch() {
+    const params = readSearchForm();
+    if (!params) return;
     const banner = document.getElementById('verdict');
+    const container = document.getElementById('results');
     banner.className = 'verdict hidden';
     container.className = 'empty';
-    container.textContent = message;
-    if (hideAnswer) {
-      document.getElementById('answer-section').classList.add('hidden');
-    }
-  }
-
-  function renderAnswer(data) {
-    const section = document.getElementById('answer-section');
-    const body = document.querySelector('#answer .answer-body');
-    const head = document.querySelector('#answer .answer-model');
-    body.textContent = data.answer || '(no answer)';
-    head.textContent = `${data.provider} · ${data.model}`;
-    section.classList.remove('hidden');
-  }
-
-  async function runSearch() {
-    const params = readForm();
-    if (!params) return;
-    setBusy('Searching...');
+    container.textContent = 'Searching...';
     try {
       const data = await api.post('/api/search', params);
       renderResults(data);
     } catch (err) {
-      document.getElementById('results').className = 'empty error';
-      document.getElementById('results').textContent = 'Search failed: ' + err.message;
+      container.className = 'empty error';
+      container.textContent = 'Search failed: ' + err.message;
     }
   }
 
+  // ----- Ask mode (entity-based) -----
+
+  function entityGroupHtml(es) {
+    const s = es.search;
+    const count = s.hits.length;
+    const label = s.overall_confidence || 'none';
+    const pct = Math.round((s.overall_confidence_score || 0) * 100);
+    const badge = (label === 'none' || !count)
+      ? '<span class="badge badge-none">no hits</span>'
+      : `<span class="badge badge-${label}">${label.toUpperCase()} &middot; ${pct}%</span>`;
+    const hits = count
+      ? s.hits.map((hit, i) => hitCardHtml(hit, i)).join('')
+      : '<div class="empty">No passages found for this entity.</div>';
+    return `
+      <article class="entity-group">
+        <header class="entity-head">
+          <span class="entity-name">${escapeHtml(es.entity)}</span>
+          ${badge}
+          <span class="muted small">${count} passage${count === 1 ? '' : 's'}</span>
+        </header>
+        <div class="entity-hits">${hits}</div>
+      </article>`;
+  }
+
+  function renderEntities(data) {
+    const ent = document.getElementById('entities');
+    document.getElementById('entities-section').classList.remove('hidden');
+    if (!data.entities || !data.entities.length) {
+      ent.className = 'empty';
+      ent.textContent = 'The LLM did not identify any entities to search.';
+      return;
+    }
+    ent.className = '';
+    ent.innerHTML = data.entities.map((es) => entityGroupHtml(es)).join('');
+  }
+
+  function readAskForm() {
+    const dataset_id = document.getElementById('a-dataset').value;
+    const query = document.getElementById('a-query').value.trim();
+    const per_entity_top_k = parseInt(document.getElementById('a-per-entity').value, 10) || 5;
+    const max_entities = parseInt(document.getElementById('a-max-entities').value, 10) || 5;
+    return (dataset_id && query) ? { dataset_id, query, per_entity_top_k, max_entities } : null;
+  }
+
   async function runAsk() {
-    const params = readForm();
+    const params = readAskForm();
     if (!params) return;
 
-    // Show a placeholder answer card so the user sees something is happening.
+    const askBtn = document.getElementById('ask-btn');
+    const ent = document.getElementById('entities');
     const section = document.getElementById('answer-section');
     const body = document.querySelector('#answer .answer-body');
     const head = document.querySelector('#answer .answer-model');
-    head.textContent = 'asking LLM...';
-    body.textContent = 'Retrieving context and waiting for the model. This can take a few seconds.';
-    section.classList.remove('hidden');
-    setBusy('Retrieving references...', /* hideAnswer */ false);
 
-    const askBtn = document.getElementById('ask-btn');
+    head.textContent = 'planning entity searches...';
+    body.textContent = 'The LLM is choosing entities to search for, retrieving passages for each, then deciding. This can take a little while.';
+    section.classList.remove('hidden');
+    document.getElementById('entities-section').classList.remove('hidden');
+    ent.className = 'empty';
+    ent.textContent = 'Working...';
+
     askBtn.disabled = true;
     try {
-      const data = await api.post('/api/ask', params);
+      const data = await api.post('/api/ask/entities', params);
+      askAnswered = true;
       renderAnswer(data);
-      renderResults(data.search);
+      renderEntities(data);
     } catch (err) {
       head.textContent = '';
       body.textContent = '';
-      document.getElementById('results').className = 'empty error';
-      document.getElementById('results').textContent = 'Ask failed: ' + err.message;
+      section.classList.add('hidden');
+      ent.className = 'empty error';
+      ent.textContent = 'Ask failed: ' + err.message;
       toast('Ask failed: ' + err.message, true);
     } finally {
       askBtn.disabled = false;
     }
   }
 
+  // ----- Wiring -----
+
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.addEventListener('click', () => {
+      const to = t.dataset.tab;
+      const from = currentMode();
+      if (from !== to) syncSharedFields(from, to);
+      showMode(to);
+    });
+  });
+
   document.getElementById('search-btn').addEventListener('click', runSearch);
   document.getElementById('ask-btn').addEventListener('click', runAsk);
-  document.getElementById('search-form').addEventListener('submit', (e) => {
+  document.getElementById('search-panel').addEventListener('submit', (e) => {
     e.preventDefault();
-    runSearch();  // Enter key in textarea = Search by default
+    runSearch();
+  });
+  document.getElementById('ask-panel').addEventListener('submit', (e) => {
+    e.preventDefault();
+    runAsk();
   });
 
   loadDatasets();
+  showMode('search');
 </script>
 {% endblock %}

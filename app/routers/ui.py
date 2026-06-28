@@ -45,3 +45,8 @@ def dataset_detail_page(
 @router.get("/search", response_class=HTMLResponse)
 def search_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "search.html", {})
+
+
+@router.get("/debug", response_class=HTMLResponse)
+def debug_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "debug.html", {})

@@ -158,7 +158,7 @@ def sync_drive_source(
     )
 
 
-@router.delete("/{dataset_id}/drive/sources/{source_id}", status_code=204)
+@router.delete("/{dataset_id}/drive/sources/{source_id}", status_code=204, response_model=None)
 def delete_drive_source(
     dataset_id: str, source_id: str, session: SessionDep
 ) -> None:

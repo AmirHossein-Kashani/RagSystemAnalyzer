@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .db import init_db
-from .routers import ask, datasets, drive, llm, search, ui
+from .routers import ask, datasets, debug, drive, llm, search, ui
 
 
 @asynccontextmanager
@@ -34,6 +34,7 @@ app.mount(
 app.include_router(datasets.router)
 app.include_router(drive.router)
 app.include_router(search.router)
+app.include_router(debug.router)
 app.include_router(ask.router)
 app.include_router(llm.router)
 app.include_router(ui.router)
