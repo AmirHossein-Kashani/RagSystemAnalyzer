@@ -45,3 +45,22 @@ def dataset_detail_page(
 @router.get("/search", response_class=HTMLResponse)
 def search_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "search.html", {})
+
+
+@router.get("/mapping-plans", response_class=HTMLResponse)
+def mapping_plans_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "mapping_plans.html", {})
+
+
+@router.get("/mapping-plans/{plan_id}", response_class=HTMLResponse)
+def mapping_plan_detail_page(
+    request: Request, plan_id: str, session: SessionDep
+) -> HTMLResponse:
+    plan = repository.get_mapping_plan(session, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="mapping plan not found")
+    return templates.TemplateResponse(
+        request,
+        "mapping_plan.html",
+        {"plan_id": plan.id, "plan_name": plan.name},
+    )

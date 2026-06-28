@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block title %}{{ plan_name }} — Mapping Plan{% endblock %}
+
+{% block content %}
+<section>
+  <p class="crumbs"><a href="/mapping-plans">Mapping Plans</a> / <span>{{ plan_name }}</span></p>
+  <h1>{{ plan_name }}</h1>
+</section>
+
+<section>
+  <h2>Run</h2>
+  <div class="card">
+    <div class="field">
+      <label>Datasets <span class="muted">(choose any number)</span></label>
+      <div id="run-datasets" class="dataset-checklist">Loading datasets...</div>
+    </div>
+    <div class="field">
+      <label for="run-query">Input query</label>
+      <textarea id="run-query" rows="4" placeholder="Learner information, question, or input to map..."></textarea>
+    </div>
+    <div class="field">
+      <label for="run-variables">Variables JSON <span class="muted">(optional)</span></label>
+      <textarea id="run-variables" rows="3" placeholder='{ "learner_id": "learner_042" }'></textarea>
+    </div>
+    <div class="field inline">
+      <label for="run-topk">Top-k</label>
+      <input id="run-topk" type="number" min="1" max="50" placeholder="plan default" style="max-width: 8rem;" />
+    </div>
+    <div class="actions">
+      <button type="button" id="run-btn" class="primary">Run plan</button>
+    </div>
+    <div id="run-result" class="run-result hidden"></div>
+  </div>
+</section>
+
+<section>
+  <h2>Configuration</h2>
+  <form id="edit-form" class="card">
+    <div class="field">
+      <label for="preset-select">Load from preset <span class="muted">(fills the fields below; save to apply)</span></label>
+      <div class="inline">
+        <select id="preset-select">
+          <option value="">Select a preset…</option>
+        </select>
+        <button type="button" id="load-preset" class="secondary">Load</button>
+      </div>
+    </div>
+    <div class="field">
+      <label for="edit-name">Name</label>
+      <input id="edit-name" maxlength="120" />
+    </div>
+    <div class="field">
+      <label for="edit-description">Description</label>
+      <textarea id="edit-description" rows="2" maxlength="1000"></textarea>
+    </div>
+    <div class="field">
+      <label>Default datasets</label>
+      <div id="edit-datasets" class="dataset-checklist">Loading datasets...</div>
+    </div>
+    <div class="field">
+      <label for="edit-system">System prompt</label>
+      <textarea id="edit-system" rows="8" placeholder="The contract the model must follow..."></textarea>
+    </div>
+    <div class="field">
+      <label for="edit-template">Prompt template <span class="muted">(use {query}, {context}, {variables})</span></label>
+      <textarea id="edit-template" rows="5"></textarea>
+    </div>
+    <div class="field">
+      <label for="edit-schema">Output JSON schema <span class="muted">(optional; leave blank for free text)</span></label>
+      <textarea id="edit-schema" rows="8" class="mono" placeholder='{ "type": "object", ... }'></textarea>
+    </div>
+    <div class="field inline">
+      <label for="edit-topk">Default top-k</label>
+      <input id="edit-topk" type="number" min="1" max="50" style="max-width: 8rem;" />
+      <label for="edit-temp">Temperature</label>
+      <input id="edit-temp" type="number" min="0" max="2" step="0.1" style="max-width: 8rem;" placeholder="LLM default" />
+    </div>
+    <div class="actions">
+      <button type="submit" class="primary">Save changes</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const PLAN_ID = "{{ plan_id }}";
+  let allDatasets = [];
+  let plan = null;
+  let presets = [];
+
+  function renderChecklist(el, selectedIds) {
+    if (!allDatasets.length) {
+      el.className = 'dataset-checklist empty';
+      el.textContent = 'No datasets available. Create datasets first.';
+      return;
+    }
+    el.className = 'dataset-checklist';
+    el.innerHTML = '';
+    const selected = new Set(selectedIds || []);
+    for (const d of allDatasets) {
+      const id = `${el.id}-${d.id}`;
+      const label = document.createElement('label');
+      label.className = 'check-row';
+      label.innerHTML = `
+        <input type="checkbox" value="${d.id}" id="${id}" ${selected.has(d.id) ? 'checked' : ''} />
+        <span>${escapeHtml(d.name)} <span class="muted small">(${d.document_count} docs)</span></span>`;
+      el.appendChild(label);
+    }
+  }
+
+  function selectedFrom(el) {
+    return [...el.querySelectorAll('input[type="checkbox"]:checked')].map((c) => c.value);
+  }
+
+  function fillForm() {
+    document.getElementById('edit-name').value = plan.name || '';
+    document.getElementById('edit-description').value = plan.description || '';
+    document.getElementById('edit-system').value = plan.system_prompt || '';
+    document.getElementById('edit-template').value = plan.prompt_template || '';
+    document.getElementById('edit-schema').value = plan.output_schema
+      ? JSON.stringify(plan.output_schema, null, 2) : '';
+    document.getElementById('edit-topk').value = plan.default_top_k || '';
+    document.getElementById('edit-temp').value = plan.temperature != null ? plan.temperature : '';
+    renderChecklist(document.getElementById('edit-datasets'), plan.dataset_ids);
+    renderChecklist(document.getElementById('run-datasets'), plan.dataset_ids);
+  }
+
+  function fillPresetSelect() {
+    const sel = document.getElementById('preset-select');
+    sel.innerHTML = '<option value="">Select a preset…</option>';
+    for (const p of presets) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name + (p.output_schema ? ' (schema)' : ' (text)');
+      sel.appendChild(opt);
+    }
+  }
+
+  function applyPresetToForm(p) {
+    document.getElementById('edit-system').value = p.system_prompt || '';
+    document.getElementById('edit-template').value = p.prompt_template || '';
+    document.getElementById('edit-schema').value = p.output_schema
+      ? JSON.stringify(p.output_schema, null, 2) : '';
+    if (p.default_top_k != null) document.getElementById('edit-topk').value = p.default_top_k;
+    document.getElementById('edit-temp').value = p.temperature != null ? p.temperature : '';
+    if (!document.getElementById('edit-description').value.trim() && p.description) {
+      document.getElementById('edit-description').value = p.description;
+    }
+  }
+
+  document.getElementById('load-preset').addEventListener('click', () => {
+    const id = document.getElementById('preset-select').value;
+    if (!id) { toast('Pick a preset first', true); return; }
+    const p = presets.find((x) => x.id === id);
+    if (!p) return;
+    applyPresetToForm(p);
+    toast(`Loaded preset "${p.name}". Review and Save changes to apply.`);
+  });
+
+  async function load() {
+    try {
+      [allDatasets, plan, presets] = await Promise.all([
+        api.get('/api/datasets'),
+        api.get(`/api/mapping-plans/${encodeURIComponent(PLAN_ID)}`),
+        api.get('/api/prompt-presets'),
+      ]);
+      fillForm();
+      fillPresetSelect();
+    } catch (err) {
+      toast('Failed to load plan: ' + err.message, true);
+    }
+  }
+
+  document.getElementById('edit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const schemaText = document.getElementById('edit-schema').value.trim();
+    let output_schema = null;
+    if (schemaText) {
+      try {
+        output_schema = JSON.parse(schemaText);
+      } catch (err) {
+        toast('Output schema is not valid JSON: ' + err.message, true);
+        return;
+      }
+    }
+    const tempVal = document.getElementById('edit-temp').value;
+    const body = {
+      name: document.getElementById('edit-name').value.trim(),
+      description: document.getElementById('edit-description').value.trim(),
+      system_prompt: document.getElementById('edit-system').value,
+      prompt_template: document.getElementById('edit-template').value,
+      output_schema: output_schema,
+      default_top_k: parseInt(document.getElementById('edit-topk').value, 10) || 5,
+      temperature: tempVal === '' ? null : parseFloat(tempVal),
+      dataset_ids: selectedFrom(document.getElementById('edit-datasets')),
+    };
+    try {
+      plan = await api.put(`/api/mapping-plans/${encodeURIComponent(PLAN_ID)}`, body);
+      fillForm();
+      toast('Saved changes');
+    } catch (err) {
+      toast('Save failed: ' + err.message, true);
+    }
+  });
+
+  document.getElementById('run-btn').addEventListener('click', async () => {
+    const query = document.getElementById('run-query').value.trim();
+    if (!query) { toast('Enter an input query', true); return; }
+    const resultEl = document.getElementById('run-result');
+    const btn = document.getElementById('run-btn');
+
+    let variables = null;
+    const varsText = document.getElementById('run-variables').value.trim();
+    if (varsText) {
+      try { variables = JSON.parse(varsText); }
+      catch (err) { toast('Variables is not valid JSON: ' + err.message, true); return; }
+    }
+    const topkVal = document.getElementById('run-topk').value;
+    const body = {
+      query,
+      dataset_ids: selectedFrom(document.getElementById('run-datasets')),
+      top_k: topkVal ? parseInt(topkVal, 10) : null,
+      variables,
+    };
+
+    btn.disabled = true;
+    resultEl.classList.remove('hidden');
+    resultEl.innerHTML = '<p class="muted">Running...</p>';
+    try {
+      const res = await api.post(`/api/mapping-plans/${encodeURIComponent(PLAN_ID)}/run`, body);
+      renderRunResult(resultEl, res);
+    } catch (err) {
+      resultEl.innerHTML = `<p class="status status-error">Run failed: ${escapeHtml(err.message)}</p>`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  function renderRunResult(el, res) {
+    const validClass = res.valid ? 'status-ok' : 'status-error';
+    const validText = res.valid ? 'VALID' : 'INVALID';
+    const outputText = (typeof res.output === 'string')
+      ? res.output : JSON.stringify(res.output, null, 2);
+
+    let html = `
+      <div class="run-meta">
+        <span class="status ${validClass}">${validText}</span>
+        ${res.repaired ? '<span class="status status-skipped">repaired</span>' : ''}
+        <span class="muted small">model: ${escapeHtml(res.model)} · ${escapeHtml(res.provider)}</span>
+      </div>`;
+
+    if (res.validation_errors && res.validation_errors.length) {
+      html += '<div class="card error"><strong>Validation errors</strong><ul>'
+        + res.validation_errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')
+        + '</ul></div>';
+    }
+
+    html += `<h3>Output</h3><pre class="output-json">${escapeHtml(outputText)}</pre>`;
+
+    const hits = (res.search && res.search.hits) || [];
+    html += `<h3>Evidence (${hits.length} retrieved)</h3>`;
+    if (!hits.length) {
+      html += '<p class="muted">No passages retrieved.</p>';
+    } else {
+      html += '<ul class="evidence-list">';
+      for (const h of hits) {
+        const ref = h.reference;
+        const pct = Math.round(h.confidence * 100);
+        html += `<li>
+          <span class="status status-${h.confidence_label === 'high' ? 'ok' : (h.confidence_label === 'medium' ? 'uploading' : 'error')}">${h.confidence_label} · ${pct}%</span>
+          <strong>${escapeHtml(ref.filename)}</strong>
+          <span class="muted small">${escapeHtml(ref.dataset_name)} · chunk ${ref.chunk_index}</span>
+        </li>`;
+      }
+      html += '</ul>';
+    }
+    el.innerHTML = html;
+  }
+
+  load();
+</script>
+{% endblock %}

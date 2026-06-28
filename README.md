@@ -15,6 +15,7 @@ LLM generate grounded answers from the retrieved passages.
 - Drag-and-drop multi-file upload with per-file status (web UI)
 - **Folder upload** — pick a folder or drop one onto the upload zone; nested subfolders are expanded and relative paths are preserved (e.g. `policies/2024/handbook.pdf`)
 - **Google Drive sync** — link a public Drive folder URL per dataset; lists remote files first, stores per-file metadata, skips unchanged files on re-sync, indexes only new or modified documents
+- **Mapping plans** — select any number of datasets and transform an input query into a structured output (e.g. the LIO) using a stored system prompt + output JSON schema; output is validated and auto-repaired once, with a retrieval evidence trace. Ships with a seedable built-in LIO plan
 - **Calibrated confidence** on every hit: percentage + High / Medium / Low badge, plus an overall verdict banner
 - **LLM-backed answers** via any OpenAI-compatible endpoint (Ollama out of the box, real OpenAI by editing one file)
 - Four LLM-related endpoints: full RAG (`/api/ask`), ask-with-supplied-context (`/api/llm/answer`), direct chat (`/api/llm/chat`), and config inspection (`/api/llm/info`)
@@ -225,6 +226,29 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 
 `top_k` is optional (defaults to `RAG_DEFAULT_TOP_K`). `temperature`, `model`, and `system_prompt` can be overridden per request on the LLM endpoints.
 
+### Mapping plans
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST   | `/api/mapping-plans`            | Create a plan `{name, description?, system_prompt?, output_schema?, prompt_template?, default_top_k?, temperature?, dataset_ids?}` |
+| POST   | `/api/mapping-plans/seed-lio`   | Idempotently create (or return) the built-in LIO plan |
+| GET    | `/api/mapping-plans`            | List plans |
+| GET    | `/api/mapping-plans/{id}`       | Plan detail (includes `dataset_ids`) |
+| PUT    | `/api/mapping-plans/{id}`       | Update plan and/or its default dataset selection |
+| DELETE | `/api/mapping-plans/{id}`       | Delete a plan |
+| POST   | `/api/mapping-plans/{id}/run`   | Run: `{query, dataset_ids?, top_k?, variables?}` → `{output, valid, validation_errors, repaired, model, provider, search}` |
+
+### Prompt presets (reusable prompt library)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST   | `/api/prompt-presets/seed`              | Idempotently create/refresh the built-in preset library |
+| GET    | `/api/prompt-presets`                   | List presets (built-ins first) |
+| POST   | `/api/prompt-presets`                   | Create a custom preset `{key, name, system_prompt, output_schema?, prompt_template?, ...}` |
+| GET    | `/api/prompt-presets/{id}`              | Preset detail |
+| DELETE | `/api/prompt-presets/{id}`              | Delete a custom preset (built-ins are protected) |
+| POST   | `/api/prompt-presets/{id}/create-plan`  | Create a new mapping plan pre-filled from a preset `{name?, dataset_ids?}` |
+
 See `/docs` for the full interactive Swagger spec.
 
 ## Google Drive sync
@@ -264,6 +288,50 @@ Supported from Drive: PDF, plain text, markdown, HTML, and native Google Docs (e
 - Files removed from Drive are **not** auto-deleted from the dataset
 - Native Google Sheets/Slides are not supported
 
+## Mapping plans
+
+A **mapping plan** is a reusable recipe that maps an input query into a desired structured output, grounded in documents retrieved from one or more datasets. It is the basis for offering this service to downstream consumers (e.g. an autism-focused learning platform that needs a `LearnerInterpretationObject`).
+
+> Deep dive with architecture, data-model, and sequence diagrams: [`docs/mapping-engine.md`](docs/mapping-engine.md).
+
+A plan stores:
+
+- `system_prompt` — the contract the model must follow
+- `output_schema` — optional JSON Schema used to validate (and repair) the model output; omit it for free-text output
+- `prompt_template` — composes the user message from `{query}`, `{context}`, and `{variables}` (also supports `{variables.field}`)
+- a default dataset set, `default_top_k`, and optional `temperature`
+
+### Run flow
+
+1. The caller selects **any number of datasets**, supplies the input `query` (and optional `variables`).
+2. The engine embeds the query once and retrieves across all selected datasets (Chroma `$in` filter), merging hits by similarity score.
+3. It renders the prompt, **injects the `output_schema`** into the system prompt (exact field names + enums), and calls the LLM in JSON mode (`response_format=json_object`, with a defensive fallback if the endpoint ignores it). If the model returns malformed JSON, it retries once.
+4. If an `output_schema` is set, the output is validated; on failure the engine performs **one repair retry** (re-prompting with the validation errors) and keeps the better result.
+5. The response returns the structured `output`, a `valid` flag, `validation_errors`, a `repaired` flag, and the retrieval `search` trace (filename, dataset, confidence per hit).
+
+### Prompt presets (a library to choose from)
+
+The service ships with a small catalog of **pre-designed prompt presets** — each bundles a `system_prompt`, an optional `output_schema`, a `prompt_template`, and recommended `temperature`/`top_k`. They are stored in the database (`prompt_presets` table) so you can pick one when building a plan and refine from there.
+
+Built-in presets:
+
+- **LIO (Learner Interpretation Object)** — the main one; full LIO Prompt Specification + JSON Schema for the LIO envelope/enums (the autism-platform use case).
+- **Grounded Q&A (structured)** — answers strictly from retrieved context with key points + confidence.
+- **Structured extraction** — extracts entities/facts into a generic JSON result.
+- **Document summary (free text)** — faithful plain-text summary (no schema).
+
+Seed/refresh the library with `POST /api/prompt-presets/seed` or the **Seed / refresh library** button on the Mapping Plans page. From a preset you can **Create plan** (pre-fills a new mapping plan), or open an existing plan and use **Load from preset** to populate its fields. You can also save your own custom presets via `POST /api/prompt-presets`.
+
+### Built-in LIO plan
+
+`POST /api/mapping-plans/seed-lio` (or the **Seed built-in LIO plan** button in the UI) seeds the preset library and creates a ready-to-use plan whose `system_prompt` is the LIO Prompt Specification and whose `output_schema` is a JSON Schema for the `LearnerInterpretationObject` envelope and enums. Attach your knowledge datasets to it, then run with learner text + variables (e.g. `learner_id`, `assessed_at`).
+
+### Scope (v1)
+
+- JSON Schema validation only — cross-field semantic LIO rules (e.g. "every non-`UNKNOWN` `support_needs` field needs a `field_reasoning` entry") are a planned extension; a hook is left in `app/validation.py`.
+- Single LLM provider via `llm_config.json` (no per-plan provider).
+- Retrieval merges across datasets by similarity score (no per-dataset quotas or reranking).
+
 ## LLM configuration
 
 The LLM is configured by a single JSON file at the project root: **`llm_config.json`**. Edit it to swap providers — no code change required.
@@ -279,6 +347,9 @@ Ships with **Ollama via an OpenAI-compatible endpoint**:
   "headers": { "ngrok-skip-browser-warning": "true" },
   "temperature": 0.1,
   "max_context_chars": 8000,
+  "max_output_tokens": 8192,
+  "num_ctx": 16384,
+  "think": false,
   "request_timeout_seconds": 120,
   "system_prompt": "..."
 }
@@ -290,6 +361,11 @@ Ships with **Ollama via an OpenAI-compatible endpoint**:
 - `headers`: extra HTTP headers (e.g. `ngrok-skip-browser-warning` when fronting Ollama with ngrok).
 - `temperature` / `system_prompt`: defaults the LLM endpoints use unless overridden per request.
 - `max_context_chars`: cap on concatenated retrieved-passage characters in the prompt.
+- `max_output_tokens`: output cap (`num_predict` for Ollama, `max_tokens` for OpenAI). Structured outputs like the LIO are large — keep this generous (e.g. 8192) so the JSON isn't cut off mid-object.
+- `num_ctx` *(Ollama only)*: model context window in tokens. The default Ollama window (~4096) is too small once a JSON Schema and retrieved context are in the prompt, which truncates output. 16384 comfortably fits the LIO. Ignored by OpenAI.
+- `think` *(Ollama only)*: set `false` to disable "thinking" on reasoning models (e.g. Qwen3). Thinking tokens eat the output budget and hurt JSON reliability. Omit/`null` to leave the model default. Ignored by OpenAI.
+
+> **Structured-output tip:** mapping plans inject the JSON Schema into the prompt and request JSON mode. For local reasoning models, the combination `think: false` + a large `num_ctx` + a generous `max_output_tokens` is what makes large objects like the LIO validate reliably. The mapping engine also retries once if the model returns malformed JSON, and performs one schema-repair retry.
 
 ### Swap to real OpenAI
 
@@ -355,29 +431,34 @@ If your queries consistently produce 0.2–0.35 raw scores and you'd like those 
 app/
   config.py        # pydantic-settings, env-driven
   db.py            # SQLAlchemy engine + session
-  models.py        # ORM: Dataset, Document
-  schemas.py       # Pydantic request/response (datasets, search, ask, llm)
+  models.py        # ORM: Dataset, Document, Drive*, MappingPlan(+Dataset), PromptPreset
+  schemas.py       # Pydantic request/response (datasets, search, ask, llm, mapping)
   repository.py    # SQL CRUD helpers
   paths.py         # upload path sanitization
   drive/           # public Drive client + incremental sync
   loader.py        # file -> text (.txt/.md/.pdf/.html)
   chunker.py       # text -> overlapping windows
   embedder.py      # sentence-transformers wrapper (CPU, normalized)
-  store.py         # ChromaDB wrapper, dataset-scoped queries
+  store.py         # ChromaDB wrapper, single + multi-dataset queries
   indexer.py       # orchestration + SHA-256 change detection
   confidence.py    # score → confidence calibration + label + overall verdict
-  retrieval.py     # shared retrieve() used by /api/search and /api/ask
-  llm.py           # LLM config, OpenAI-SDK client, prompt builder, model auto-discovery
+  retrieval.py     # retrieve() + retrieve_multi() across datasets
+  validation.py    # JSON Schema validation for mapping outputs
+  mapping.py       # mapping plan engine (retrieve → prompt → JSON → validate/repair)
+  seeds.py         # built-in prompt-preset library (LIO + others) + LIO plan seeding
+  llm.py           # LLM config, OpenAI-SDK client, chat + chat_json, model discovery
   deps.py          # FastAPI Depends singletons (embedder, store, indexer)
   main.py          # app factory + lifespan + router mounting
   routers/
     datasets.py    # /api/datasets/*
     drive.py       # /api/datasets/{id}/drive/*
+    mapping.py     # /api/mapping-plans/* (CRUD + run + seed-lio)
+    presets.py     # /api/prompt-presets/* (library + create-plan-from-preset)
     search.py      # /api/search
     ask.py         # /api/ask (retrieve + LLM)
     llm.py         # /api/llm/{info, answer, chat}
-    ui.py          # /, /datasets, /search HTML pages
-  templates/       # Jinja: base, datasets, dataset, search
+    ui.py          # /, /datasets, /search, /mapping-plans HTML pages
+  templates/       # Jinja: base, datasets, dataset, search, mapping_plans, mapping_plan
   static/          # app.js, styles.css
 data/
   app.db           # SQLite metadata (auto-created)

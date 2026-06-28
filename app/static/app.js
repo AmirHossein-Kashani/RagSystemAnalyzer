@@ -19,6 +19,11 @@ const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   }).then(handle),
+  put:  (url, body)   => fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(handle),
   postForm: (url, fd) => fetch(url, { method: 'POST', body: fd }).then(handle),
   del:  (url)         => fetch(url, { method: 'DELETE' }).then(handle),
 };

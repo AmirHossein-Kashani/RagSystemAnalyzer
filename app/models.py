@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -99,3 +108,70 @@ class DriveFileSnapshot(Base):
     last_sync_status: Mapped[Optional[str]] = mapped_column(String(32), default=None)
 
     drive_source: Mapped["DriveSource"] = relationship(back_populates="files")
+
+
+class MappingPlan(Base):
+    __tablename__ = "mapping_plans"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(String(1000), default=None)
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    output_schema: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    prompt_template: Mapped[str] = mapped_column(Text, default="")
+    default_top_k: Mapped[int] = mapped_column(Integer, default=5)
+    temperature: Mapped[Optional[float]] = mapped_column(Float, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    datasets: Mapped[list["MappingPlanDataset"]] = relationship(
+        back_populates="mapping_plan",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class MappingPlanDataset(Base):
+    __tablename__ = "mapping_plan_datasets"
+    __table_args__ = (
+        UniqueConstraint(
+            "mapping_plan_id", "dataset_id", name="uq_mapping_plan_dataset"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    mapping_plan_id: Mapped[str] = mapped_column(
+        ForeignKey("mapping_plans.id", ondelete="CASCADE"), index=True
+    )
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), index=True
+    )
+
+    mapping_plan: Mapped["MappingPlan"] = relationship(back_populates="datasets")
+
+
+class PromptPreset(Base):
+    """A reusable, pre-designed system prompt + output schema + template that can
+    be loaded into a mapping plan. Built-in presets (e.g. LIO) ship with the app;
+    users may also save their own.
+    """
+
+    __tablename__ = "prompt_presets"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[Optional[str]] = mapped_column(String(1000), default=None)
+    category: Mapped[Optional[str]] = mapped_column(String(60), default=None)
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    output_schema: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    prompt_template: Mapped[str] = mapped_column(Text, default="")
+    default_top_k: Mapped[Optional[int]] = mapped_column(Integer, default=None)
+    temperature: Mapped[Optional[float]] = mapped_column(Float, default=None)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

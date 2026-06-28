@@ -7,7 +7,15 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Dataset, Document, DriveFileSnapshot, DriveSource
+from .models import (
+    Dataset,
+    Document,
+    DriveFileSnapshot,
+    DriveSource,
+    MappingPlan,
+    MappingPlanDataset,
+    PromptPreset,
+)
 
 
 def new_id(nbytes: int = 8) -> str:
@@ -233,3 +241,177 @@ def upsert_drive_file_snapshot(
 def touch_drive_source_synced(session: Session, source: DriveSource) -> None:
     source.last_synced_at = datetime.now(timezone.utc)
     session.flush()
+
+
+# ---------- Mapping plans ----------
+
+def create_mapping_plan(
+    session: Session,
+    *,
+    name: str,
+    description: Optional[str],
+    system_prompt: str,
+    output_schema: Optional[str],
+    prompt_template: str,
+    default_top_k: int,
+    temperature: Optional[float],
+) -> MappingPlan:
+    plan = MappingPlan(
+        id=new_id(),
+        name=name.strip(),
+        description=description,
+        system_prompt=system_prompt,
+        output_schema=output_schema,
+        prompt_template=prompt_template,
+        default_top_k=default_top_k,
+        temperature=temperature,
+    )
+    session.add(plan)
+    session.flush()
+    return plan
+
+
+def get_mapping_plan(session: Session, plan_id: str) -> Optional[MappingPlan]:
+    return session.get(MappingPlan, plan_id)
+
+
+def get_mapping_plan_by_name(session: Session, name: str) -> Optional[MappingPlan]:
+    return session.scalar(select(MappingPlan).where(MappingPlan.name == name.strip()))
+
+
+def list_mapping_plans(session: Session) -> list[MappingPlan]:
+    return list(
+        session.scalars(select(MappingPlan).order_by(MappingPlan.created_at.desc()))
+    )
+
+
+def update_mapping_plan(session: Session, plan: MappingPlan, **fields) -> MappingPlan:
+    for key, value in fields.items():
+        if value is not None and hasattr(plan, key):
+            setattr(plan, key, value)
+    session.flush()
+    return plan
+
+
+def delete_mapping_plan(session: Session, plan: MappingPlan) -> None:
+    session.delete(plan)
+
+
+def set_mapping_plan_datasets(
+    session: Session, plan: MappingPlan, dataset_ids: list[str]
+) -> None:
+    """Replace the plan's default dataset set with the given ids."""
+    for link in list(plan.datasets):
+        session.delete(link)
+    session.flush()
+    seen: set[str] = set()
+    for dataset_id in dataset_ids:
+        if dataset_id in seen:
+            continue
+        seen.add(dataset_id)
+        session.add(
+            MappingPlanDataset(
+                id=new_id(),
+                mapping_plan_id=plan.id,
+                dataset_id=dataset_id,
+            )
+        )
+    session.flush()
+
+
+# ---------- Prompt presets ----------
+
+def create_prompt_preset(
+    session: Session,
+    *,
+    key: str,
+    name: str,
+    description: Optional[str],
+    category: Optional[str],
+    system_prompt: str,
+    output_schema: Optional[str],
+    prompt_template: str,
+    default_top_k: Optional[int],
+    temperature: Optional[float],
+    is_builtin: bool = False,
+) -> PromptPreset:
+    preset = PromptPreset(
+        id=new_id(),
+        key=key.strip(),
+        name=name.strip(),
+        description=description,
+        category=category,
+        system_prompt=system_prompt,
+        output_schema=output_schema,
+        prompt_template=prompt_template,
+        default_top_k=default_top_k,
+        temperature=temperature,
+        is_builtin=is_builtin,
+    )
+    session.add(preset)
+    session.flush()
+    return preset
+
+
+def get_prompt_preset(session: Session, preset_id: str) -> Optional[PromptPreset]:
+    return session.get(PromptPreset, preset_id)
+
+
+def get_prompt_preset_by_key(session: Session, key: str) -> Optional[PromptPreset]:
+    return session.scalar(select(PromptPreset).where(PromptPreset.key == key.strip()))
+
+
+def list_prompt_presets(session: Session) -> list[PromptPreset]:
+    return list(
+        session.scalars(
+            select(PromptPreset).order_by(
+                PromptPreset.is_builtin.desc(), PromptPreset.name.asc()
+            )
+        )
+    )
+
+
+def upsert_builtin_preset(
+    session: Session,
+    *,
+    key: str,
+    name: str,
+    description: Optional[str],
+    category: Optional[str],
+    system_prompt: str,
+    output_schema: Optional[str],
+    prompt_template: str,
+    default_top_k: Optional[int],
+    temperature: Optional[float],
+) -> PromptPreset:
+    """Create or refresh a built-in preset, keyed by its stable `key`."""
+    preset = get_prompt_preset_by_key(session, key)
+    if preset is None:
+        return create_prompt_preset(
+            session,
+            key=key,
+            name=name,
+            description=description,
+            category=category,
+            system_prompt=system_prompt,
+            output_schema=output_schema,
+            prompt_template=prompt_template,
+            default_top_k=default_top_k,
+            temperature=temperature,
+            is_builtin=True,
+        )
+    preset.name = name.strip()
+    preset.description = description
+    preset.category = category
+    preset.system_prompt = system_prompt
+    preset.output_schema = output_schema
+    preset.prompt_template = prompt_template
+    preset.default_top_k = default_top_k
+    preset.temperature = temperature
+    preset.is_builtin = True
+    session.flush()
+    return preset
+
+
+def delete_prompt_preset(session: Session, preset: PromptPreset) -> None:
+    session.delete(preset)

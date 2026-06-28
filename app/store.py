@@ -54,10 +54,24 @@ class VectorStore:
         return count
 
     def query(self, embedding: list[float], top_k: int, dataset_id: str) -> list[dict]:
+        return self._query(embedding, top_k, {"dataset_id": dataset_id})
+
+    def query_multi(
+        self, embedding: list[float], top_k: int, dataset_ids: list[str]
+    ) -> list[dict]:
+        if not dataset_ids:
+            return []
+        if len(dataset_ids) == 1:
+            where = {"dataset_id": dataset_ids[0]}
+        else:
+            where = {"dataset_id": {"$in": dataset_ids}}
+        return self._query(embedding, top_k, where)
+
+    def _query(self, embedding: list[float], top_k: int, where: dict) -> list[dict]:
         res = self._collection.query(
             query_embeddings=[embedding],
             n_results=top_k,
-            where={"dataset_id": dataset_id},
+            where=where,
             include=["documents", "metadatas", "distances"],
         )
         docs = (res.get("documents") or [[]])[0]

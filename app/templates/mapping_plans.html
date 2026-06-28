@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Mapping Plans{% endblock %}
+
+{% block content %}
+<section>
+  <h1>Mapping Plans</h1>
+  <p class="muted">A mapping plan transforms an input query into a structured output, grounded in documents retrieved from any number of datasets you select.</p>
+
+  <form id="create-form" class="card">
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" required maxlength="120" placeholder="e.g. LIO interpretation" />
+    </div>
+    <div class="field">
+      <label for="description">Description <span class="muted">(optional)</span></label>
+      <textarea id="description" name="description" rows="2" maxlength="1000" placeholder="What does this plan produce?"></textarea>
+    </div>
+    <div class="actions">
+      <button type="submit" class="primary">Create plan</button>
+      <button type="button" id="seed-lio" class="secondary">Seed built-in LIO plan</button>
+    </div>
+  </form>
+</section>
+
+<section>
+  <div class="section-head">
+    <h2>Prompt presets</h2>
+    <button type="button" id="seed-presets" class="secondary">Seed / refresh library</button>
+  </div>
+  <p class="muted">Ready-made system prompts + output schemas. Create a new plan pre-filled from one, or load one into an existing plan from its page.</p>
+  <div id="presets-list" class="card empty">Loading...</div>
+</section>
+
+<section>
+  <h2>Your plans</h2>
+  <div id="plans-list" class="card empty">Loading...</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadPlans() {
+    const container = document.getElementById('plans-list');
+    try {
+      const items = await api.get('/api/mapping-plans');
+      if (!items.length) {
+        container.className = 'card empty';
+        container.textContent = 'No mapping plans yet. Create one above, or seed the LIO plan.';
+        return;
+      }
+      container.className = 'card';
+      container.innerHTML = '';
+      const table = document.createElement('table');
+      table.innerHTML = `
+        <thead><tr><th>Name</th><th>Datasets</th><th>Schema</th><th>Created</th><th></th></tr></thead>
+        <tbody></tbody>`;
+      const tbody = table.querySelector('tbody');
+      for (const p of items) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><a href="/mapping-plans/${encodeURIComponent(p.id)}">${escapeHtml(p.name)}</a></td>
+          <td>${p.dataset_ids.length}</td>
+          <td>${p.output_schema ? 'JSON schema' : 'free text'}</td>
+          <td>${formatDate(p.created_at)}</td>
+          <td><button class="danger" data-id="${p.id}">Delete</button></td>`;
+        tr.querySelector('button.danger').addEventListener('click', () => deletePlan(p.id, p.name));
+        tbody.appendChild(tr);
+      }
+      container.appendChild(table);
+    } catch (err) {
+      container.className = 'card error';
+      container.textContent = 'Failed to load plans: ' + err.message;
+    }
+  }
+
+  async function deletePlan(id, name) {
+    if (!confirm(`Delete mapping plan "${name}"?`)) return;
+    try {
+      await api.del(`/api/mapping-plans/${encodeURIComponent(id)}`);
+      toast(`Deleted "${name}"`);
+      loadPlans();
+    } catch (err) {
+      toast('Delete failed: ' + err.message, true);
+    }
+  }
+
+  document.getElementById('create-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('name').value.trim();
+    const description = document.getElementById('description').value.trim() || null;
+    if (!name) return;
+    try {
+      const plan = await api.post('/api/mapping-plans', { name, description });
+      toast(`Created plan "${plan.name}"`);
+      window.location.href = `/mapping-plans/${encodeURIComponent(plan.id)}`;
+    } catch (err) {
+      toast('Create failed: ' + err.message, true);
+    }
+  });
+
+  document.getElementById('seed-lio').addEventListener('click', async () => {
+    try {
+      const plan = await api.post('/api/mapping-plans/seed-lio', {});
+      toast(`LIO plan ready: "${plan.name}"`);
+      loadPlans();
+      loadPresets();
+    } catch (err) {
+      toast('Seed failed: ' + err.message, true);
+    }
+  });
+
+  async function loadPresets() {
+    const container = document.getElementById('presets-list');
+    try {
+      const items = await api.get('/api/prompt-presets');
+      if (!items.length) {
+        container.className = 'card empty';
+        container.textContent = 'No presets yet. Click "Seed / refresh library" to load the built-ins.';
+        return;
+      }
+      container.className = 'card';
+      container.innerHTML = '';
+      const list = document.createElement('div');
+      list.className = 'preset-grid';
+      for (const p of items) {
+        const card = document.createElement('div');
+        card.className = 'preset-card';
+        card.innerHTML = `
+          <div class="preset-head">
+            <strong>${escapeHtml(p.name)}</strong>
+            ${p.is_builtin ? '<span class="tag">built-in</span>' : ''}
+          </div>
+          ${p.category ? `<div class="muted small">${escapeHtml(p.category)}</div>` : ''}
+          <p class="preset-desc">${escapeHtml(p.description || '')}</p>
+          <div class="preset-meta muted small">
+            ${p.output_schema ? 'JSON schema' : 'free text'}
+            ${p.temperature != null ? ' · temp ' + p.temperature : ''}
+            ${p.default_top_k != null ? ' · top-k ' + p.default_top_k : ''}
+          </div>
+          <div class="actions">
+            <button class="primary small" data-id="${p.id}">Create plan</button>
+          </div>`;
+        card.querySelector('button').addEventListener('click', () => createFromPreset(p));
+        list.appendChild(card);
+      }
+      container.appendChild(list);
+    } catch (err) {
+      container.className = 'card error';
+      container.textContent = 'Failed to load presets: ' + err.message;
+    }
+  }
+
+  async function createFromPreset(preset) {
+    const name = prompt(`Name for the new plan:`, preset.name);
+    if (name === null) return;
+    try {
+      const plan = await api.post(`/api/prompt-presets/${encodeURIComponent(preset.id)}/create-plan`,
+        { name: name.trim() || null, dataset_ids: [] });
+      toast(`Created plan "${plan.name}"`);
+      window.location.href = `/mapping-plans/${encodeURIComponent(plan.id)}`;
+    } catch (err) {
+      toast('Create failed: ' + err.message, true);
+    }
+  }
+
+  document.getElementById('seed-presets').addEventListener('click', async () => {
+    try {
+      const items = await api.post('/api/prompt-presets/seed', {});
+      toast(`Prompt library ready (${items.length} presets)`);
+      loadPresets();
+    } catch (err) {
+      toast('Seed failed: ' + err.message, true);
+    }
+  });
+
+  loadPresets();
+  loadPlans();
+</script>
+{% endblock %}

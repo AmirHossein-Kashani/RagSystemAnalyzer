@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -189,3 +189,97 @@ class DriveSyncResultOut(BaseModel):
     unsupported: int
     errors: int
     files: list[DriveSyncFileResultOut]
+
+
+# ---------- Mapping plans ----------
+
+class MappingPlanCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(None, max_length=1000)
+    system_prompt: str = Field("", max_length=200000)
+    output_schema: Optional[dict] = None
+    prompt_template: str = Field(
+        "Input query:\n{query}\n\nRetrieved context:\n{context}\n",
+        max_length=50000,
+    )
+    default_top_k: int = Field(5, ge=1, le=50)
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    dataset_ids: list[str] = Field(default_factory=list)
+
+
+class MappingPlanUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    description: Optional[str] = Field(None, max_length=1000)
+    system_prompt: Optional[str] = Field(None, max_length=200000)
+    output_schema: Optional[dict] = None
+    prompt_template: Optional[str] = Field(None, max_length=50000)
+    default_top_k: Optional[int] = Field(None, ge=1, le=50)
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    dataset_ids: Optional[list[str]] = None
+
+
+class MappingPlanOut(BaseModel):
+    id: str
+    name: str
+    description: Optional[str]
+    system_prompt: str
+    output_schema: Optional[dict]
+    prompt_template: str
+    default_top_k: int
+    temperature: Optional[float]
+    dataset_ids: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class MappingRunRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    dataset_ids: Optional[list[str]] = None
+    top_k: Optional[int] = Field(None, ge=1, le=50)
+    variables: Optional[dict] = None
+
+
+class MappingRunResponse(BaseModel):
+    plan_id: str
+    output: Any
+    valid: bool
+    validation_errors: list[str]
+    repaired: bool
+    model: str
+    provider: str
+    search: SearchResponse
+
+
+# ---------- Prompt presets ----------
+
+class PromptPresetCreate(BaseModel):
+    key: str = Field(..., min_length=1, max_length=80)
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(None, max_length=1000)
+    category: Optional[str] = Field(None, max_length=60)
+    system_prompt: str = Field("", max_length=200000)
+    output_schema: Optional[dict] = None
+    prompt_template: str = Field("", max_length=50000)
+    default_top_k: Optional[int] = Field(None, ge=1, le=50)
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+
+
+class PromptPresetOut(BaseModel):
+    id: str
+    key: str
+    name: str
+    description: Optional[str]
+    category: Optional[str]
+    system_prompt: str
+    output_schema: Optional[dict]
+    prompt_template: str
+    default_top_k: Optional[int]
+    temperature: Optional[float]
+    is_builtin: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreatePlanFromPresetRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    dataset_ids: list[str] = Field(default_factory=list)

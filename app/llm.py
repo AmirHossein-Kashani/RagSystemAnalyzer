@@ -21,6 +21,15 @@ class LLMConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     temperature: float = 0.2
     max_context_chars: int = 8000
+    max_output_tokens: int = 4096
+    # Ollama only: model context window (input + output tokens). The OpenAI-
+    # compatible default is small (~4096), which truncates large structured
+    # prompts. Passed through `extra_body.options.num_ctx`. Ignored by OpenAI.
+    num_ctx: Optional[int] = 8192
+    # Ollama only: set to false to disable "thinking" on reasoning models (e.g.
+    # Qwen3). Thinking tokens consume the output budget and hurt structured/JSON
+    # output reliability. None = leave the model default. Ignored by OpenAI.
+    think: Optional[bool] = None
     request_timeout_seconds: float = 120.0
     system_prompt: str = (
         "You are a concise, factual assistant. Answer the user's question using ONLY "
@@ -84,6 +93,29 @@ class LLMClient:
             timeout=config.request_timeout_seconds,
         )
 
+    def _completion_kwargs(self, temperature: float) -> dict:
+        """Build provider-appropriate generation limits.
+
+        For Ollama we pass `num_ctx` (context window) and `num_predict` (output
+        cap) together inside a single `extra_body.options` dict. Mixing the
+        OpenAI `max_tokens` arg with a custom `options` dict makes Ollama drop
+        `num_predict`, which truncates long structured outputs — so for Ollama we
+        intentionally avoid `max_tokens`. For OpenAI we use the standard
+        `max_tokens` argument.
+        """
+        kwargs: dict = {"temperature": temperature}
+        if self.config.provider == "ollama":
+            options: dict = {"num_predict": self.config.max_output_tokens}
+            if self.config.num_ctx:
+                options["num_ctx"] = self.config.num_ctx
+            extra_body: dict = {"options": options}
+            if self.config.think is not None:
+                extra_body["think"] = self.config.think
+            kwargs["extra_body"] = extra_body
+        else:
+            kwargs["max_tokens"] = self.config.max_output_tokens
+        return kwargs
+
     def chat(self, model: str, system: str, user: str, temperature: float) -> str:
         resp = self._client.chat.completions.create(
             model=model,
@@ -91,10 +123,74 @@ class LLMClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=temperature,
+            **self._completion_kwargs(temperature),
         )
         choice = resp.choices[0]
         return (choice.message.content or "").strip()
+
+    def chat_json(
+        self, model: str, system: str, user: str, temperature: float
+    ) -> dict:
+        """Chat expecting a single JSON object back.
+
+        Requests OpenAI-compatible JSON mode; falls back to defensive parsing if
+        the endpoint ignores `response_format` or wraps the JSON in code fences.
+        A generous output cap (`num_predict`/`max_tokens`) plus a large `num_ctx`
+        give reasoning models room to emit the full object — otherwise the
+        response can be cut off (finish_reason=length), sometimes with empty
+        content.
+        """
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        kwargs = self._completion_kwargs(temperature)
+        try:
+            resp = self._client.chat.completions.create(
+                model=model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                **kwargs,
+            )
+        except Exception:
+            # Endpoint may not support response_format; retry without it.
+            resp = self._client.chat.completions.create(
+                model=model,
+                messages=messages,
+                **kwargs,
+            )
+        choice = resp.choices[0]
+        content = (choice.message.content or "").strip()
+        if not content and getattr(choice, "finish_reason", None) == "length":
+            raise ValueError(
+                "LLM response was truncated before any output (finish_reason=length). "
+                "Increase `max_output_tokens`/`num_ctx` in llm_config.json or shorten "
+                "the prompt."
+            )
+        return parse_json_object(content)
+
+
+def parse_json_object(content: str) -> dict:
+    """Parse a JSON object from model output, tolerating code fences/prose."""
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        # Drop an optional leading language tag like "json\n".
+        newline = text.find("\n")
+        if newline != -1 and " " not in text[:newline]:
+            text = text[newline + 1 :]
+        text = text.strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("LLM did not return a JSON object")
+        parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM output is not a JSON object")
+    return parsed
 
 
 @lru_cache(maxsize=1)
