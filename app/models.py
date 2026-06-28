@@ -119,6 +119,10 @@ class MappingPlan(Base):
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     output_schema: Mapped[Optional[str]] = mapped_column(Text, default=None)
     prompt_template: Mapped[str] = mapped_column(Text, default="")
+    # Optional stage-1 "entity layer": when entity_prompt is set, a first LLM
+    # call extracts structured entities that get injected as {entities}.
+    entity_prompt: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    entity_schema: Mapped[Optional[str]] = mapped_column(Text, default=None)
     default_top_k: Mapped[int] = mapped_column(Integer, default=5)
     temperature: Mapped[Optional[float]] = mapped_column(Float, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -168,6 +172,8 @@ class PromptPreset(Base):
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     output_schema: Mapped[Optional[str]] = mapped_column(Text, default=None)
     prompt_template: Mapped[str] = mapped_column(Text, default="")
+    entity_prompt: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    entity_schema: Mapped[Optional[str]] = mapped_column(Text, default=None)
     default_top_k: Mapped[Optional[int]] = mapped_column(Integer, default=None)
     temperature: Mapped[Optional[float]] = mapped_column(Float, default=None)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)

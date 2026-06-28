@@ -93,30 +93,67 @@ class LLMClient:
             timeout=config.request_timeout_seconds,
         )
 
-    def _completion_kwargs(self, temperature: float) -> dict:
-        """Build provider-appropriate generation limits.
+    def _ollama_native_url(self) -> str:
+        """Ollama's native chat endpoint (sibling of the /v1 OpenAI-compat path).
 
-        For Ollama we pass `num_ctx` (context window) and `num_predict` (output
-        cap) together inside a single `extra_body.options` dict. Mixing the
-        OpenAI `max_tokens` arg with a custom `options` dict makes Ollama drop
-        `num_predict`, which truncates long structured outputs — so for Ollama we
-        intentionally avoid `max_tokens`. For OpenAI we use the standard
-        `max_tokens` argument.
+        The native API is required because Ollama's OpenAI-compatible endpoint
+        IGNORES `num_ctx`, silently pinning the context window to its small
+        default (~4096). That truncates large structured prompts (e.g. the LIO)
+        before the model can emit output. The native /api/chat endpoint honors
+        `options.num_ctx`, `options.num_predict`, and `think`.
         """
-        kwargs: dict = {"temperature": temperature}
-        if self.config.provider == "ollama":
-            options: dict = {"num_predict": self.config.max_output_tokens}
-            if self.config.num_ctx:
-                options["num_ctx"] = self.config.num_ctx
-            extra_body: dict = {"options": options}
-            if self.config.think is not None:
-                extra_body["think"] = self.config.think
-            kwargs["extra_body"] = extra_body
-        else:
-            kwargs["max_tokens"] = self.config.max_output_tokens
-        return kwargs
+        base = self.config.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3].rstrip("/")
+        return f"{base}/api/chat"
+
+    def _ollama_chat(
+        self, model: str, system: str, user: str, temperature: float, *, json_mode: bool
+    ) -> str:
+        options: dict = {
+            "temperature": temperature,
+            "num_predict": self.config.max_output_tokens,
+        }
+        if self.config.num_ctx:
+            options["num_ctx"] = self.config.num_ctx
+        body: dict = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+            "options": options,
+        }
+        if json_mode:
+            body["format"] = "json"
+        if self.config.think is not None:
+            body["think"] = self.config.think
+
+        with httpx.Client(
+            timeout=self.config.request_timeout_seconds,
+            headers=self.config.headers or None,
+        ) as client:
+            resp = client.post(self._ollama_native_url(), json=body)
+            resp.raise_for_status()
+            data = resp.json()
+
+        content = (data.get("message", {}).get("content") or "").strip()
+        if not content and data.get("done_reason") == "length":
+            raise ValueError(
+                "LLM response was truncated before any output (finish_reason=length). "
+                "Increase `max_output_tokens`/`num_ctx` in llm_config.json or shorten "
+                "the prompt."
+            )
+        return content
+
+    def _completion_kwargs(self, temperature: float) -> dict:
+        """Generation limits for the OpenAI provider path (max_tokens)."""
+        return {"temperature": temperature, "max_tokens": self.config.max_output_tokens}
 
     def chat(self, model: str, system: str, user: str, temperature: float) -> str:
+        if self.config.provider == "ollama":
+            return self._ollama_chat(model, system, user, temperature, json_mode=False)
         resp = self._client.chat.completions.create(
             model=model,
             messages=[
@@ -133,13 +170,19 @@ class LLMClient:
     ) -> dict:
         """Chat expecting a single JSON object back.
 
-        Requests OpenAI-compatible JSON mode; falls back to defensive parsing if
-        the endpoint ignores `response_format` or wraps the JSON in code fences.
-        A generous output cap (`num_predict`/`max_tokens`) plus a large `num_ctx`
-        give reasoning models room to emit the full object — otherwise the
-        response can be cut off (finish_reason=length), sometimes with empty
-        content.
+        For Ollama we use the native /api/chat endpoint (with `format: "json"`)
+        so that `num_ctx`/`num_predict` are actually applied; the OpenAI-compat
+        endpoint ignores them and truncates large objects. For OpenAI we request
+        JSON mode via `response_format`. Both paths fall back to defensive parsing
+        for code-fence/prose wrapping. A generous output cap plus a large
+        `num_ctx` give reasoning models room to emit the full object.
         """
+        if self.config.provider == "ollama":
+            content = self._ollama_chat(
+                model, system, user, temperature, json_mode=True
+            )
+            return parse_json_object(content)
+
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},

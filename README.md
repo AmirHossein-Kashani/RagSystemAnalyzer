@@ -15,7 +15,7 @@ LLM generate grounded answers from the retrieved passages.
 - Drag-and-drop multi-file upload with per-file status (web UI)
 - **Folder upload** — pick a folder or drop one onto the upload zone; nested subfolders are expanded and relative paths are preserved (e.g. `policies/2024/handbook.pdf`)
 - **Google Drive sync** — link a public Drive folder URL per dataset; lists remote files first, stores per-file metadata, skips unchanged files on re-sync, indexes only new or modified documents
-- **Mapping plans** — select any number of datasets and transform an input query into a structured output (e.g. the LIO) using a stored system prompt + output JSON schema; output is validated and auto-repaired once, with a retrieval evidence trace. Ships with a seedable built-in LIO plan
+- **Mapping plans** — select any number of datasets and transform an input query into a structured output (e.g. the LIO) using a stored system prompt + output JSON schema; output is validated and auto-repaired once, with a retrieval evidence trace. Supports an optional **two-stage entity layer** (a first LLM pass extracts structured entities that enrich the mapping prompt). Ships with a seedable built-in LIO plan
 - **Calibrated confidence** on every hit: percentage + High / Medium / Low badge, plus an overall verdict banner
 - **LLM-backed answers** via any OpenAI-compatible endpoint (Ollama out of the box, real OpenAI by editing one file)
 - Four LLM-related endpoints: full RAG (`/api/ask`), ask-with-supplied-context (`/api/llm/answer`), direct chat (`/api/llm/chat`), and config inspection (`/api/llm/info`)
@@ -298,16 +298,22 @@ A plan stores:
 
 - `system_prompt` — the contract the model must follow
 - `output_schema` — optional JSON Schema used to validate (and repair) the model output; omit it for free-text output
-- `prompt_template` — composes the user message from `{query}`, `{context}`, and `{variables}` (also supports `{variables.field}`)
+- `prompt_template` — composes the user message from `{query}`, `{context}`, `{variables}`, and `{entities}` (also supports `{variables.field}` / `{entities.field}`)
+- `entity_prompt` / `entity_schema` — optional **stage-1 entity layer** (see below)
 - a default dataset set, `default_top_k`, and optional `temperature`
+
+### Optional entity layer (two-stage pipeline)
+
+A plan can define an `entity_prompt` to enable a **first LLM pass** that runs **before retrieval**: it normalizes the raw `query` + `variables` into a structured `entities` object (best-effort validated against `entity_schema` if set), which is then injected as `{entities}` into the main mapping prompt. If stage 1 fails or returns invalid JSON, the run degrades gracefully (continues with `entities=null` and surfaces an `entity_error`) — it never aborts. Retrieval still uses the original query. Plans without `entity_prompt` run single-stage exactly as before. The built-in LIO plan ships with an entity layer that extracts learner observations, profile facts, session context, and performance signals.
 
 ### Run flow
 
 1. The caller selects **any number of datasets**, supplies the input `query` (and optional `variables`).
-2. The engine embeds the query once and retrieves across all selected datasets (Chroma `$in` filter), merging hits by similarity score.
-3. It renders the prompt, **injects the `output_schema`** into the system prompt (exact field names + enums), and calls the LLM in JSON mode (`response_format=json_object`, with a defensive fallback if the endpoint ignores it). If the model returns malformed JSON, it retries once.
-4. If an `output_schema` is set, the output is validated; on failure the engine performs **one repair retry** (re-prompting with the validation errors) and keeps the better result.
-5. The response returns the structured `output`, a `valid` flag, `validation_errors`, a `repaired` flag, and the retrieval `search` trace (filename, dataset, confidence per hit).
+2. **(Optional) Stage 1:** if `entity_prompt` is set, a first LLM call extracts structured `entities` from the raw input (no retrieval/context).
+3. The engine embeds the query once and retrieves across all selected datasets (Chroma `$in` filter), merging hits by similarity score.
+4. It renders the prompt (merging any `{entities}`), **injects the `output_schema`** into the system prompt (exact field names + enums), and calls the LLM in JSON mode (`response_format=json_object`, with a defensive fallback if the endpoint ignores it). If the model returns malformed JSON, it retries once.
+5. If an `output_schema` is set, the output is validated; on failure the engine performs **one repair retry** (re-prompting with the validation errors) and keeps the better result.
+6. The response returns the structured `output`, a `valid` flag, `validation_errors`, a `repaired` flag, the stage-1 `entities` (and any `entity_error`), and the retrieval `search` trace (filename, dataset, confidence per hit).
 
 ### Prompt presets (a library to choose from)
 

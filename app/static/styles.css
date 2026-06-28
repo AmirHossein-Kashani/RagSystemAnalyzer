@@ -558,6 +558,17 @@ button.small {
   font-size: 0.85rem;
 }
 .small { font-size: 0.82rem; }
+fieldset.field {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem 0.25rem;
+  margin: 0;
+}
+fieldset.field > legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
 
 /* Debug embeddings page */
 .debug-meta {

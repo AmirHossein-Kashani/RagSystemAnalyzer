@@ -269,6 +269,8 @@ class MappingPlanCreate(BaseModel):
         "Input query:\n{query}\n\nRetrieved context:\n{context}\n",
         max_length=50000,
     )
+    entity_prompt: Optional[str] = Field(None, max_length=200000)
+    entity_schema: Optional[dict] = None
     default_top_k: int = Field(5, ge=1, le=50)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     dataset_ids: list[str] = Field(default_factory=list)
@@ -280,6 +282,8 @@ class MappingPlanUpdate(BaseModel):
     system_prompt: Optional[str] = Field(None, max_length=200000)
     output_schema: Optional[dict] = None
     prompt_template: Optional[str] = Field(None, max_length=50000)
+    entity_prompt: Optional[str] = Field(None, max_length=200000)
+    entity_schema: Optional[dict] = None
     default_top_k: Optional[int] = Field(None, ge=1, le=50)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     dataset_ids: Optional[list[str]] = None
@@ -292,6 +296,8 @@ class MappingPlanOut(BaseModel):
     system_prompt: str
     output_schema: Optional[dict]
     prompt_template: str
+    entity_prompt: Optional[str]
+    entity_schema: Optional[dict]
     default_top_k: int
     temperature: Optional[float]
     dataset_ids: list[str]
@@ -315,6 +321,8 @@ class MappingRunResponse(BaseModel):
     model: str
     provider: str
     search: SearchResponse
+    entities: Optional[dict] = None
+    entity_error: Optional[str] = None
 
 
 # ---------- Prompt presets ----------
@@ -327,6 +335,8 @@ class PromptPresetCreate(BaseModel):
     system_prompt: str = Field("", max_length=200000)
     output_schema: Optional[dict] = None
     prompt_template: str = Field("", max_length=50000)
+    entity_prompt: Optional[str] = Field(None, max_length=200000)
+    entity_schema: Optional[dict] = None
     default_top_k: Optional[int] = Field(None, ge=1, le=50)
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
 
@@ -340,6 +350,8 @@ class PromptPresetOut(BaseModel):
     system_prompt: str
     output_schema: Optional[dict]
     prompt_template: str
+    entity_prompt: Optional[str]
+    entity_schema: Optional[dict]
     default_top_k: Optional[int]
     temperature: Optional[float]
     is_builtin: bool

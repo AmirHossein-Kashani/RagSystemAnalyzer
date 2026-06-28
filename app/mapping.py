@@ -25,33 +25,107 @@ class MappingResult:
     model: str
     provider: str
     search: SearchResponse
+    entities: Optional[dict] = None
+    entity_error: Optional[str] = None
 
 
-def _format_variables(variables: Optional[dict]) -> str:
-    if not variables:
+def _format_obj(obj: Optional[dict]) -> str:
+    if not obj:
         return ""
-    return json.dumps(variables, ensure_ascii=False, indent=2)
+    return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
-def _render_template(template: str, query: str, context: str, variables: Optional[dict]) -> str:
+def _render_dotted(rendered: str, prefix: str, obj: Optional[dict]) -> str:
+    """Substitute {prefix.field} placeholders from a dict."""
+    if not obj:
+        return rendered
+    for field, value in obj.items():
+        token = "{" + prefix + "." + str(field) + "}"
+        if token in rendered:
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
+            rendered = rendered.replace(token, str(value))
+    return rendered
+
+
+def _render_template(
+    template: str,
+    query: str,
+    context: str,
+    variables: Optional[dict],
+    entities: Optional[dict] = None,
+) -> str:
     rendered = template
     replacements = {
         "{query}": query,
         "{context}": context,
-        "{variables}": _format_variables(variables),
+        "{variables}": _format_obj(variables),
+        "{entities}": _format_obj(entities),
     }
     for key, value in replacements.items():
         rendered = rendered.replace(key, value)
 
-    # Support {variables.field} style placeholders for convenience.
-    if variables:
-        for field, value in variables.items():
-            token = "{variables." + str(field) + "}"
-            if token in rendered:
-                if isinstance(value, (dict, list)):
-                    value = json.dumps(value, ensure_ascii=False)
-                rendered = rendered.replace(token, str(value))
+    # Support {variables.field} / {entities.field} style placeholders.
+    rendered = _render_dotted(rendered, "variables", variables)
+    rendered = _render_dotted(rendered, "entities", entities)
     return rendered
+
+
+def _generate_json(client, model: str, system: str, user: str, temperature: float) -> dict:
+    """chat_json with one retry on malformed/truncated output."""
+    try:
+        return client.chat_json(model=model, system=system, user=user, temperature=temperature)
+    except ValueError:
+        retry_user = (
+            user
+            + "\n\nIMPORTANT: Return ONLY a single complete, valid JSON object. "
+            "Close and escape every string; do not include any text outside the JSON."
+        )
+        return client.chat_json(
+            model=model, system=system, user=retry_user, temperature=temperature
+        )
+
+
+def _load_schema(raw: Optional[str], label: str) -> Optional[dict]:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"stored {label} is not valid JSON: {exc}")
+
+
+def extract_entities(
+    client,
+    model: str,
+    plan: MappingPlan,
+    query: str,
+    variables: Optional[dict],
+    temperature: float,
+) -> tuple[Optional[dict], Optional[str]]:
+    """Stage 1: run the entity-extraction LLM on the raw query + variables.
+
+    Returns (entities, error). On any failure we degrade gracefully: the mapping
+    run continues with entities=None and the error is surfaced to the caller.
+    """
+    entity_schema = _load_schema(plan.entity_schema, "entity_schema")
+    system = _build_system_prompt(plan.entity_prompt or "", entity_schema)
+    user = (
+        f"Input:\n{query}\n\n"
+        f"Structured variables:\n{_format_obj(variables) or '(none)'}\n\n"
+        "Extract the entities as instructed. Return only the JSON object."
+    )
+    try:
+        entities = _generate_json(client, model, system, user, temperature)
+    except Exception as exc:  # noqa: BLE001 - degrade gracefully
+        return None, f"entity extraction failed: {exc}"
+
+    if entity_schema is not None:
+        # Best-effort validation: note errors but don't block the run.
+        errs = validate_against_schema(entities, entity_schema)
+        if errs:
+            return entities, "entities did not fully match entity_schema: " + "; ".join(errs[:3])
+    return entities, None
 
 
 def _build_system_prompt(base_system: str, schema: Optional[dict]) -> str:
@@ -106,23 +180,28 @@ def run_mapping_plan(
     effective_ids = dataset_ids or [link.dataset_id for link in plan.datasets]
     datasets = lookup_datasets_or_raise(session, effective_ids)
 
+    config = get_config()
+    temperature = plan.temperature if plan.temperature is not None else config.temperature
+    model = resolve_model(config)
+    client = get_client()
+
+    # Stage 1 (optional): extract structured entities from the raw input first.
+    entities: Optional[dict] = None
+    entity_error: Optional[str] = None
+    if plan.entity_prompt:
+        entities, entity_error = extract_entities(
+            client, model, plan, query, variables, temperature
+        )
+
     effective_top_k = top_k or plan.default_top_k or settings.default_top_k
     search = retrieve_multi(session, embedder, store, datasets, query, effective_top_k)
 
-    config = get_config()
     context = _build_context(search, config.max_context_chars)
-    user_prompt = _render_template(plan.prompt_template, query, context, variables)
-    temperature = plan.temperature if plan.temperature is not None else config.temperature
-    model = resolve_model(config)
+    user_prompt = _render_template(
+        plan.prompt_template, query, context, variables, entities
+    )
 
-    schema: Optional[dict] = None
-    if plan.output_schema:
-        try:
-            schema = json.loads(plan.output_schema)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"stored output_schema is not valid JSON: {exc}")
-
-    client = get_client()
+    schema = _load_schema(plan.output_schema, "output_schema")
 
     if schema is None:
         # Free-form text output (no schema to enforce).
@@ -140,31 +219,13 @@ def run_mapping_plan(
             model=model,
             provider=config.provider,
             search=search,
+            entities=entities,
+            entity_error=entity_error,
         )
 
     system_prompt = _build_system_prompt(plan.system_prompt, schema)
 
-    try:
-        output = client.chat_json(
-            model=model,
-            system=system_prompt,
-            user=user_prompt,
-            temperature=temperature,
-        )
-    except ValueError:
-        # Occasionally the model emits malformed/truncated JSON. Retry once with
-        # an explicit reminder before giving up.
-        retry_user = (
-            user_prompt
-            + "\n\nIMPORTANT: Return ONLY a single complete, valid JSON object. "
-            "Close and escape every string; do not include any text outside the JSON."
-        )
-        output = client.chat_json(
-            model=model,
-            system=system_prompt,
-            user=retry_user,
-            temperature=temperature,
-        )
+    output = _generate_json(client, model, system_prompt, user_prompt, temperature)
     errors = validate_against_schema(output, schema)
     repaired = False
 
@@ -203,4 +264,6 @@ def run_mapping_plan(
         model=model,
         provider=config.provider,
         search=search,
+        entities=entities,
+        entity_error=entity_error,
     )

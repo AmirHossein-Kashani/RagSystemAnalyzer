@@ -253,6 +253,8 @@ def create_mapping_plan(
     system_prompt: str,
     output_schema: Optional[str],
     prompt_template: str,
+    entity_prompt: Optional[str] = None,
+    entity_schema: Optional[str] = None,
     default_top_k: int,
     temperature: Optional[float],
 ) -> MappingPlan:
@@ -263,6 +265,8 @@ def create_mapping_plan(
         system_prompt=system_prompt,
         output_schema=output_schema,
         prompt_template=prompt_template,
+        entity_prompt=entity_prompt,
+        entity_schema=entity_schema,
         default_top_k=default_top_k,
         temperature=temperature,
     )
@@ -331,6 +335,8 @@ def create_prompt_preset(
     system_prompt: str,
     output_schema: Optional[str],
     prompt_template: str,
+    entity_prompt: Optional[str] = None,
+    entity_schema: Optional[str] = None,
     default_top_k: Optional[int],
     temperature: Optional[float],
     is_builtin: bool = False,
@@ -344,6 +350,8 @@ def create_prompt_preset(
         system_prompt=system_prompt,
         output_schema=output_schema,
         prompt_template=prompt_template,
+        entity_prompt=entity_prompt,
+        entity_schema=entity_schema,
         default_top_k=default_top_k,
         temperature=temperature,
         is_builtin=is_builtin,
@@ -381,6 +389,8 @@ def upsert_builtin_preset(
     system_prompt: str,
     output_schema: Optional[str],
     prompt_template: str,
+    entity_prompt: Optional[str] = None,
+    entity_schema: Optional[str] = None,
     default_top_k: Optional[int],
     temperature: Optional[float],
 ) -> PromptPreset:
@@ -396,6 +406,8 @@ def upsert_builtin_preset(
             system_prompt=system_prompt,
             output_schema=output_schema,
             prompt_template=prompt_template,
+            entity_prompt=entity_prompt,
+            entity_schema=entity_schema,
             default_top_k=default_top_k,
             temperature=temperature,
             is_builtin=True,
@@ -406,6 +418,8 @@ def upsert_builtin_preset(
     preset.system_prompt = system_prompt
     preset.output_schema = output_schema
     preset.prompt_template = prompt_template
+    preset.entity_prompt = entity_prompt
+    preset.entity_schema = entity_schema
     preset.default_top_k = default_top_k
     preset.temperature = temperature
     preset.is_builtin = True

@@ -62,13 +62,24 @@
       <textarea id="edit-system" rows="8" placeholder="The contract the model must follow..."></textarea>
     </div>
     <div class="field">
-      <label for="edit-template">Prompt template <span class="muted">(use {query}, {context}, {variables})</span></label>
+      <label for="edit-template">Prompt template <span class="muted">(use {query}, {context}, {variables}, {entities})</span></label>
       <textarea id="edit-template" rows="5"></textarea>
     </div>
     <div class="field">
       <label for="edit-schema">Output JSON schema <span class="muted">(optional; leave blank for free text)</span></label>
       <textarea id="edit-schema" rows="8" class="mono" placeholder='{ "type": "object", ... }'></textarea>
     </div>
+    <fieldset class="field">
+      <legend>Entity layer (stage 1) <span class="muted">(optional; runs a first LLM pass before retrieval)</span></legend>
+      <div class="field">
+        <label for="edit-entity-prompt">Entity extraction prompt <span class="muted">(leave blank to disable stage 1)</span></label>
+        <textarea id="edit-entity-prompt" rows="6" placeholder="Instructions for normalizing the raw input into structured entities..."></textarea>
+      </div>
+      <div class="field">
+        <label for="edit-entity-schema">Entity JSON schema <span class="muted">(optional; validates the extracted entities)</span></label>
+        <textarea id="edit-entity-schema" rows="6" class="mono" placeholder='{ "type": "object", ... }'></textarea>
+      </div>
+    </fieldset>
     <div class="field inline">
       <label for="edit-topk">Default top-k</label>
       <input id="edit-topk" type="number" min="1" max="50" style="max-width: 8rem;" />
@@ -120,6 +131,9 @@
     document.getElementById('edit-template').value = plan.prompt_template || '';
     document.getElementById('edit-schema').value = plan.output_schema
       ? JSON.stringify(plan.output_schema, null, 2) : '';
+    document.getElementById('edit-entity-prompt').value = plan.entity_prompt || '';
+    document.getElementById('edit-entity-schema').value = plan.entity_schema
+      ? JSON.stringify(plan.entity_schema, null, 2) : '';
     document.getElementById('edit-topk').value = plan.default_top_k || '';
     document.getElementById('edit-temp').value = plan.temperature != null ? plan.temperature : '';
     renderChecklist(document.getElementById('edit-datasets'), plan.dataset_ids);
@@ -142,6 +156,9 @@
     document.getElementById('edit-template').value = p.prompt_template || '';
     document.getElementById('edit-schema').value = p.output_schema
       ? JSON.stringify(p.output_schema, null, 2) : '';
+    document.getElementById('edit-entity-prompt').value = p.entity_prompt || '';
+    document.getElementById('edit-entity-schema').value = p.entity_schema
+      ? JSON.stringify(p.entity_schema, null, 2) : '';
     if (p.default_top_k != null) document.getElementById('edit-topk').value = p.default_top_k;
     document.getElementById('edit-temp').value = p.temperature != null ? p.temperature : '';
     if (!document.getElementById('edit-description').value.trim() && p.description) {
@@ -184,6 +201,16 @@
         return;
       }
     }
+    const entitySchemaText = document.getElementById('edit-entity-schema').value.trim();
+    let entity_schema = null;
+    if (entitySchemaText) {
+      try {
+        entity_schema = JSON.parse(entitySchemaText);
+      } catch (err) {
+        toast('Entity schema is not valid JSON: ' + err.message, true);
+        return;
+      }
+    }
     const tempVal = document.getElementById('edit-temp').value;
     const body = {
       name: document.getElementById('edit-name').value.trim(),
@@ -191,6 +218,8 @@
       system_prompt: document.getElementById('edit-system').value,
       prompt_template: document.getElementById('edit-template').value,
       output_schema: output_schema,
+      entity_prompt: document.getElementById('edit-entity-prompt').value,
+      entity_schema: entity_schema,
       default_top_k: parseInt(document.getElementById('edit-topk').value, 10) || 5,
       temperature: tempVal === '' ? null : parseFloat(tempVal),
       dataset_ids: selectedFrom(document.getElementById('edit-datasets')),
@@ -254,6 +283,13 @@
       html += '<div class="card error"><strong>Validation errors</strong><ul>'
         + res.validation_errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')
         + '</ul></div>';
+    }
+
+    if (res.entity_error) {
+      html += `<div class="card error"><strong>Entity layer warning</strong><p class="muted small">${escapeHtml(res.entity_error)}</p></div>`;
+    }
+    if (res.entities != null) {
+      html += `<h3>Entities (stage 1)</h3><pre class="output-json">${escapeHtml(JSON.stringify(res.entities, null, 2))}</pre>`;
     }
 
     html += `<h3>Output</h3><pre class="output-json">${escapeHtml(outputText)}</pre>`;

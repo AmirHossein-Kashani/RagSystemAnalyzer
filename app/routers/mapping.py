@@ -39,20 +39,25 @@ def _parse_schema_or_400(output_schema: Optional[dict]) -> Optional[str]:
     return json.dumps(output_schema)
 
 
+def _loads_or_none(raw: Optional[str]) -> Optional[dict]:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
 def _plan_to_out(plan: MappingPlan) -> MappingPlanOut:
-    schema: Optional[dict] = None
-    if plan.output_schema:
-        try:
-            schema = json.loads(plan.output_schema)
-        except json.JSONDecodeError:
-            schema = None
     return MappingPlanOut(
         id=plan.id,
         name=plan.name,
         description=plan.description,
         system_prompt=plan.system_prompt,
-        output_schema=schema,
+        output_schema=_loads_or_none(plan.output_schema),
         prompt_template=plan.prompt_template,
+        entity_prompt=plan.entity_prompt,
+        entity_schema=_loads_or_none(plan.entity_schema),
         default_top_k=plan.default_top_k,
         temperature=plan.temperature,
         dataset_ids=[link.dataset_id for link in plan.datasets],
@@ -67,6 +72,7 @@ def create_plan(payload: MappingPlanCreate, session: SessionDep) -> MappingPlanO
         raise HTTPException(status_code=409, detail="mapping plan name already exists")
 
     schema_json = _parse_schema_or_400(payload.output_schema)
+    entity_schema_json = _parse_schema_or_400(payload.entity_schema)
     plan = repository.create_mapping_plan(
         session,
         name=payload.name,
@@ -74,6 +80,8 @@ def create_plan(payload: MappingPlanCreate, session: SessionDep) -> MappingPlanO
         system_prompt=payload.system_prompt,
         output_schema=schema_json,
         prompt_template=payload.prompt_template,
+        entity_prompt=payload.entity_prompt,
+        entity_schema=entity_schema_json,
         default_top_k=payload.default_top_k,
         temperature=payload.temperature,
     )
@@ -126,12 +134,16 @@ def update_plan(
         fields["system_prompt"] = payload.system_prompt
     if payload.prompt_template is not None:
         fields["prompt_template"] = payload.prompt_template
+    if payload.entity_prompt is not None:
+        fields["entity_prompt"] = payload.entity_prompt
     if payload.default_top_k is not None:
         fields["default_top_k"] = payload.default_top_k
     if payload.temperature is not None:
         fields["temperature"] = payload.temperature
     if payload.output_schema is not None:
         fields["output_schema"] = _parse_schema_or_400(payload.output_schema)
+    if payload.entity_schema is not None:
+        fields["entity_schema"] = _parse_schema_or_400(payload.entity_schema)
 
     repository.update_mapping_plan(session, plan, **fields)
     if payload.dataset_ids is not None:
@@ -186,4 +198,6 @@ def run_plan(
         model=result.model,
         provider=result.provider,
         search=result.search,
+        entities=result.entities,
+        entity_error=result.entity_error,
     )

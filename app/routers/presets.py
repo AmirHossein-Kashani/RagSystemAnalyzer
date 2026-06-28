@@ -32,6 +32,15 @@ def _schema_dict(raw: Optional[str]) -> Optional[dict]:
         return None
 
 
+def _check_and_dump(schema: Optional[dict]) -> Optional[str]:
+    if schema is None:
+        return None
+    schema_error = check_schema(schema)
+    if schema_error:
+        raise HTTPException(status_code=400, detail=schema_error)
+    return json.dumps(schema)
+
+
 def _preset_to_out(preset: PromptPreset) -> PromptPresetOut:
     return PromptPresetOut(
         id=preset.id,
@@ -42,6 +51,8 @@ def _preset_to_out(preset: PromptPreset) -> PromptPresetOut:
         system_prompt=preset.system_prompt,
         output_schema=_schema_dict(preset.output_schema),
         prompt_template=preset.prompt_template,
+        entity_prompt=preset.entity_prompt,
+        entity_schema=_schema_dict(preset.entity_schema),
         default_top_k=preset.default_top_k,
         temperature=preset.temperature,
         is_builtin=preset.is_builtin,
@@ -58,6 +69,8 @@ def _plan_to_out(plan: MappingPlan) -> MappingPlanOut:
         system_prompt=plan.system_prompt,
         output_schema=_schema_dict(plan.output_schema),
         prompt_template=plan.prompt_template,
+        entity_prompt=plan.entity_prompt,
+        entity_schema=_schema_dict(plan.entity_schema),
         default_top_k=plan.default_top_k,
         temperature=plan.temperature,
         dataset_ids=[link.dataset_id for link in plan.datasets],
@@ -83,12 +96,8 @@ def create_preset(payload: PromptPresetCreate, session: SessionDep) -> PromptPre
     if repository.get_prompt_preset_by_key(session, payload.key):
         raise HTTPException(status_code=409, detail="preset key already exists")
 
-    schema_json: Optional[str] = None
-    if payload.output_schema is not None:
-        schema_error = check_schema(payload.output_schema)
-        if schema_error:
-            raise HTTPException(status_code=400, detail=schema_error)
-        schema_json = json.dumps(payload.output_schema)
+    schema_json = _check_and_dump(payload.output_schema)
+    entity_schema_json = _check_and_dump(payload.entity_schema)
 
     preset = repository.create_prompt_preset(
         session,
@@ -99,6 +108,8 @@ def create_preset(payload: PromptPresetCreate, session: SessionDep) -> PromptPre
         system_prompt=payload.system_prompt,
         output_schema=schema_json,
         prompt_template=payload.prompt_template,
+        entity_prompt=payload.entity_prompt,
+        entity_schema=entity_schema_json,
         default_top_k=payload.default_top_k,
         temperature=payload.temperature,
         is_builtin=False,
@@ -147,6 +158,8 @@ def create_plan_from_preset(
         system_prompt=preset.system_prompt,
         output_schema=preset.output_schema,
         prompt_template=preset.prompt_template,
+        entity_prompt=preset.entity_prompt,
+        entity_schema=preset.entity_schema,
         default_top_k=preset.default_top_k or 5,
         temperature=preset.temperature,
     )

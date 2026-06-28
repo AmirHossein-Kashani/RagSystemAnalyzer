@@ -268,9 +268,71 @@ LIO_PROMPT_TEMPLATE = (
     "Learner input and context:\n{query}\n\n"
     "Structured variables (may include learner_id, assessed_at, profile constraints):\n"
     "{variables}\n\n"
+    "Pre-extracted learner signals (stage 1 entity layer; treat as structured "
+    "evidence, not as the final answer):\n{entities}\n\n"
     "Retrieved knowledge (numbered sources):\n{context}\n\n"
     "Produce the LearnerInterpretationObject as specified by the system instructions. "
     "Return only the JSON object."
+)
+
+
+# Stage 1 (entity layer): a first LLM pass that normalizes the free-form learner
+# input into structured signals BEFORE retrieval/interpretation. These entities
+# are injected as {entities} into the LIO prompt above.
+LIO_ENTITY_SCHEMA: dict = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "LearnerSignals",
+    "type": "object",
+    "required": [
+        "observations",
+        "profile_facts",
+        "session_context",
+        "performance_signals",
+    ],
+    "properties": {
+        "observations": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Concrete behavioral observations stated in the input.",
+        },
+        "profile_facts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Stable learner-profile facts (abilities, preferences, constraints).",
+        },
+        "session_context": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Today's context: objective, mood, environment, time available.",
+        },
+        "performance_signals": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "History/runtime signals: completion, idle, assists, error patterns.",
+        },
+        "constraints": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Explicit limitations to respect (e.g. max word length).",
+        },
+    },
+    "additionalProperties": False,
+}
+
+LIO_ENTITY_PROMPT = (
+    "You are the entity-extraction stage for an autism-focused learning platform. "
+    "Read the raw learner input and structured variables, then NORMALIZE them into "
+    "discrete, atomic learner signals. Do NOT interpret, infer capacities, or "
+    "recommend anything — that is a later stage's job.\n\n"
+    "Sort each signal into the correct bucket:\n"
+    "- observations: concrete behaviors explicitly described.\n"
+    "- profile_facts: stable abilities, interests, preferences, profile constraints.\n"
+    "- session_context: today's objective, mood, environment, time available.\n"
+    "- performance_signals: history/runtime facts (completion, idle, assists, errors).\n"
+    "- constraints: explicit limits to respect (e.g. max word length).\n\n"
+    "Keep each item short and faithful to the input. Only include what is stated or "
+    "directly given; use empty arrays when a bucket has nothing. Return ONLY the JSON "
+    "object — no markdown, comments, or extra text."
 )
 
 
@@ -370,6 +432,8 @@ class PresetDef:
     prompt_template: str
     default_top_k: Optional[int]
     temperature: Optional[float]
+    entity_prompt: Optional[str] = None
+    entity_schema: Optional[dict] = None
 
 
 PROMPT_PRESETS: list[PresetDef] = [
@@ -384,6 +448,8 @@ PROMPT_PRESETS: list[PresetDef] = [
         system_prompt=LIO_SYSTEM_PROMPT,
         output_schema=LIO_SCHEMA,
         prompt_template=LIO_PROMPT_TEMPLATE,
+        entity_prompt=LIO_ENTITY_PROMPT,
+        entity_schema=LIO_ENTITY_SCHEMA,
         default_top_k=6,
         temperature=0.1,
     ),
@@ -446,6 +512,8 @@ def seed_prompt_presets(session: Session) -> list[PromptPreset]:
                 system_prompt=d.system_prompt,
                 output_schema=json.dumps(d.output_schema) if d.output_schema else None,
                 prompt_template=d.prompt_template,
+                entity_prompt=d.entity_prompt,
+                entity_schema=json.dumps(d.entity_schema) if d.entity_schema else None,
                 default_top_k=d.default_top_k,
                 temperature=d.temperature,
             )
@@ -475,6 +543,8 @@ def seed_lio_plan(session: Session) -> MappingPlan:
         system_prompt=LIO_SYSTEM_PROMPT,
         output_schema=json.dumps(LIO_SCHEMA),
         prompt_template=LIO_PROMPT_TEMPLATE,
+        entity_prompt=LIO_ENTITY_PROMPT,
+        entity_schema=json.dumps(LIO_ENTITY_SCHEMA),
         default_top_k=6,
         temperature=0.1,
     )
